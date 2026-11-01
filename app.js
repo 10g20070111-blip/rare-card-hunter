@@ -12,6 +12,14 @@ function resetRegister(){$('sourceUrl').value='';$('fetchStatus').textContent=''
 function validUrl(raw){try{const u=new URL(raw);const h=u.hostname.toLowerCase();if(u.protocol!=='https:')return null;if(h==='dm.takaratomy.co.jp'||h.endsWith('.dm.takaratomy.co.jp')||h==='dmwiki.net'||h.endsWith('.dmwiki.net'))return u;return null}catch{return null}}
 function absUrl(src,base){try{return new URL(src,base).href}catch{return ''}}
 function cleanText(s=''){return String(s).replace(/\\\\n/g,'\n').replace(/\r/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/<br\s*\/?>/gi,'\n').replace(/[\t ]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').replace(/^[|\s]+|[|\s]+$/gm,'').trim()}
+// Keep only the printed card rules, never the shop/product listings appended by the reader.
+function cleanCardRules(raw=''){
+ let s=String(raw||'').replace(/\r/g,'').replace(/\\n/g,'\n');
+ s=s.split(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\s*)?(?:商品情報|同名カードが含まれる商品|関連カード|収録情報|カードのFAQ|よくある質問|FAQ|カード検索|トップページ)(?:\s|$)/m)[0];
+ s=s.replace(/(?:^|\n)\s*\*\s*(?:&count=|https?:\/\/)/m,'');
+ s=s.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[-_]{3,}$/.test(x)&&!/^\*\s*(?:&count=|商品情報)/.test(x)).map(x=>x.replace(/^(?:\*|※)\s*(?=[^\s])/,'■ ').replace(/^(?:[-+]\s+)(?=.{2})/,'■ ')).join('\n');
+ return cleanText(s);
+}
 function extractTextFromDom(doc){
  const labelRe=/(カードテキスト|テキスト|能力|カードの能力|効果)/;
  for(const el of [...doc.querySelectorAll('th,dt,strong,b,h2,h3,h4')]){
@@ -36,7 +44,7 @@ function pageData(doc,url){
  let image=meta('meta[property="og:image"]')||meta('meta[name="twitter:image"]');
  if(!image){const im=[...doc.images].find(i=>/card|cards|cardimg|カード/i.test((i.getAttribute('src')||'')+' '+(i.getAttribute('alt')||'')));if(im)image=im.getAttribute('src')||im.src}
  const extras={type:find(['カードタイプ','種類']),civilization:find(['文明']),rarity:find(['レアリティ']),power:find(['パワー']),race:find(['種族'])};
- return{name,cost,number,text:cleanText(text),image:absUrl(image,url),url,...extras};
+ return{name,cost,number,text:cleanCardRules(text),image:absUrl(image,url),url,...extras};
 }
 function markdownData(md,url){
  const raw=String(md||'').replace(/\r/g,'');
@@ -86,7 +94,7 @@ function markdownData(md,url){
  const imgs=[...joined.matchAll(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g)].map(m=>({alt:m[1],url:m[2]}));
  const image=(imgs.find(x=>/card|カード|gorg|ゴルギ/i.test(x.alt+' '+x.url))||imgs.find(x=>!/logo|banner|icon/i.test(x.alt+' '+x.url))||{}).url||'';
  const collector=number||((title+' '+joined.slice(0,1500)).match(/(?:DM\d{2}[A-Z0-9-]*\s*)?(?:[0-9]{1,3}\/[0-9]{1,3}|S[0-9]+\/S[0-9]+)/i)||[])[0]||'';
- return {name,cost,number:collector,text:cleanText(text),image,url};
+ return {name,cost,number:collector,text:cleanCardRules(text),image,url};
 }
 async function fetchReader(url){
  const endpoint='https://r.jina.ai/'+url;
@@ -113,7 +121,7 @@ function extractOfficialMarkdown(md,url){
   return (all.match(re)||[])[1]?.trim()||'';
  };
  let cost=row('コスト').match(/[0-9]+/)?.[0]||'';
- let number=(titleLine.match(/(S\d+\/S\d+)/i)||all.match(/(S\d+\/S\d+)/i)||[])[1]||'';
+ let number=(titleLine.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||all.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||[])[1]||'';
  const idPart=new URL(url).searchParams.get('id')||'';const setMatch=idPart.match(/^dm(\d{2}[a-z0-9]+)-s\d+$/i);if(setMatch&&number)number=setMatch[1].toUpperCase()+'  '+number.toUpperCase();
  let text='';
  const start=lines.findIndex(x=>/特殊能力|カードの能力/.test(x.replace(/^#+\s*/,'')));
@@ -121,7 +129,7 @@ function extractOfficialMarkdown(md,url){
   const block=[];
   for(let i=start+1;i<lines.length;i++){
    const x=lines[i].trim();
-   if(/^(?:フレーバー|関連カード|収録情報|よくある質問|商品情報|カードのFAQ)/.test(x.replace(/^#+\s*/,'')))break;
+   if(/^(?:フレーバー|関連カード|収録情報|よくある質問|商品情報|カードのFAQ|同名カードが含まれる商品)/.test(x.replace(/^#+\s*/,'')))break;
    if(/^#{1,4}\s/.test(x) && block.length)break;
    if(!x || /^[-*_]{3,}$/.test(x))continue;
    let v=x.replace(/^>\s*/,'').replace(/^[-*+]\s*/,'').trim();
@@ -133,7 +141,7 @@ function extractOfficialMarkdown(md,url){
  // Official card pages publish the image with a predictable ID-based JPEG path.
  const image=officialCardImage(url);
  const civilization=row('文明'), type=row('カードの種類'), rarity=row('レアリティ'), power=row('パワー'), race=row('種族');
- return {name:title,cost,number,text,image,url,type,civilization,rarity,power,race};
+ return {name:title,cost,number,text:cleanCardRules(text),image,url,type,civilization,rarity,power,race};
 }
 function extractWikiOnlyCardText(md){
  const lines=String(md||'').replace(/\r/g,'').split('\n');
@@ -169,18 +177,18 @@ $('fetchPage').onclick=async()=>{
   else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v))};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
   if(isOfficial){const exactImage=officialCardImage(url.href);if(exactImage)parsed.image=exactImage;}
   if(!parsed.name&&!parsed.text&&!parsed.image&&!parsed.cost&&!parsed.number)throw Error('ページからカード情報を抽出できませんでした');
-  draft={...parsed,url:url.href};renderPreview();
+  draft={...parsed,text:cleanCardRules(parsed.text),url:url.href};renderPreview();
   const missing=[];if(!draft.name)missing.push('カード名');if(!draft.cost)missing.push('コスト');if(!draft.number)missing.push('コレクター番号');if(!draft.text)missing.push('テキスト');if(!draft.image)missing.push('画像');
   $('fetchStatus').textContent=missing.length?'一部の情報を取得できませんでした（'+missing.join('・')+'）。「編集する」から補完できます。':'カード情報を取得しました。内容を確認してください。';
  }catch(e){$('fetchStatus').textContent='自動取得に失敗しました。通信制限、外部読み取りサービスの応答、またはページ形式が原因の可能性があります。時間をおいて再試行するか、「編集する」から入力してください。';}
  finally{$('fetchPage').disabled=false}
 };
 function raceMarkup(value=''){return escapeHtml(value).replace(/\s*\/\s*/g,'<wbr>/') }
-function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').textContent=draft.name||'カード名を取得できません';$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=draft.text||'—';$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
+function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').textContent=draft.name||'カード名を取得できません';$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=cleanCardRules(draft.text)||'—';$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
 function escapeAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 $('editPreview').onclick=()=>{$('editPanel').hidden=false;$('previewPanel').hidden=true;$('editName').value=draft.name;$('editCost').value=draft.cost;$('editNumber').value=draft.number;$('editType').value=draft.type||'';$('editCivilization').value=draft.civilization||'';$('editRarity').value=draft.rarity||'';$('editPower').value=draft.power||'';$('editRace').value=draft.race||'';$('editText').value=draft.text;$('editImageUrl').value=draft.image;$('editImagePreview').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}">`:''};$('backToPreview').onclick=renderPreview;
-$('editImageFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;editedImage=await imageData(f);$('editImagePreview').innerHTML=`<img src="${editedImage}">`};$('applyEdit').onclick=()=>{draft.name=$('editName').value.trim();draft.cost=$('editCost').value.trim();draft.number=$('editNumber').value.trim();draft.type=$('editType').value.trim();draft.civilization=$('editCivilization').value.trim();draft.rarity=$('editRarity').value.trim();draft.power=$('editPower').value.trim();draft.race=$('editRace').value.trim();draft.text=$('editText').value;draft.image=$('editImageUrl').value.trim();if(editedImage)draft.image=editedImage;renderPreview()};
-$('cancelPreview').onclick=()=>{if(confirm('取得した内容を破棄しますか？'))resetRegister()};$('confirmSave').onclick=async()=>{if(!draft?.name){alert('カード名がありません。「編集する」からカード名を入力してください。');return}const c={id:crypto.randomUUID(),name:draft.name,cost:draft.cost,number:draft.number,text:draft.text,image:draft.image||null,url:draft.url,type:draft.type||'',civilization:draft.civilization||'',rarity:draft.rarity||'',power:draft.power||'',race:draft.race||'',owned:0,wanted:$('previewWanted').checked,wantQty:1,createdAt:new Date().toISOString()};await saveCard(c);alert('カードを登録しました！');show('home');resetRegister()};
+$('editImageFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;editedImage=await imageData(f);$('editImagePreview').innerHTML=`<img src="${editedImage}">`};$('applyEdit').onclick=()=>{draft.name=$('editName').value.trim();draft.cost=$('editCost').value.trim();draft.number=$('editNumber').value.trim();draft.type=$('editType').value.trim();draft.civilization=$('editCivilization').value.trim();draft.rarity=$('editRarity').value.trim();draft.power=$('editPower').value.trim();draft.race=$('editRace').value.trim();draft.text=cleanCardRules($('editText').value);draft.image=$('editImageUrl').value.trim();if(editedImage)draft.image=editedImage;renderPreview()};
+$('cancelPreview').onclick=()=>{if(confirm('取得した内容を破棄しますか？'))resetRegister()};$('confirmSave').onclick=async()=>{if(!draft?.name){alert('カード名がありません。「編集する」からカード名を入力してください。');return}const c={id:crypto.randomUUID(),name:draft.name,cost:draft.cost,number:draft.number,text:cleanCardRules(draft.text),image:draft.image||null,url:draft.url,type:draft.type||'',civilization:draft.civilization||'',rarity:draft.rarity||'',power:draft.power||'',race:draft.race||'',owned:0,wanted:$('previewWanted').checked,wantQty:1,createdAt:new Date().toISOString()};await saveCard(c);alert('カードを登録しました！');show('home');resetRegister()};
 function imageData(file){return new Promise((ok,no)=>{if(!file.type.startsWith('image/'))return no(Error('画像ファイルを選択してください'));const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const cv=document.createElement('canvas'),scale=Math.min(1,1200/Math.max(im.width,im.height));cv.width=im.width*scale;cv.height=im.height*scale;cv.getContext('2d').drawImage(im,0,0,cv.width,cv.height);ok(cv.toDataURL('image/jpeg',.82))};im.onerror=no;im.src=r.result};r.onerror=no;r.readAsDataURL(file)})}
 $('backgroundFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await saveSetting('background',await imageData(f));paintHome();alert('背景画像を設定しました。')}catch(err){alert(err.message)}};$('clearBackground').onclick=async()=>{await saveSetting('background',null);paintHome();alert('背景画像を解除しました。')};
 $('characterFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await saveSetting('character',await imageData(f));paintHome()}catch(err){alert(err.message)}};
@@ -228,36 +236,37 @@ $('tabRegistered').onclick=()=>{activeCollectionTab='registered';paintCollection
 $('backToCollection').onclick=()=>{selectedCardId=null;paintCollection()};
 function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;selectedCardId=id;$('collectionItems').hidden=true;$('cardDetail').hidden=false;
  const rows=[['コスト',c.cost],['コレクター番号',c.number],['カードタイプ',c.type],['文明',c.civilization],['レアリティ',c.rarity],['パワー',c.power],['種族',c.race]];
- $('detailContent').innerHTML=`<h2>${escapeHtml(c.name)}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(c.text||'—')}</p></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;
+ $('detailContent').innerHTML=`<h2>${escapeHtml(c.name)}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(cleanCardRules(c.text)||'—')}</p></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;
  $('toggleWanted').textContent=c.wanted?'購入予定から外す':'購入予定に追加';$('deleteCard').onclick=async()=>{if(!confirm('このカードを登録一覧から削除しますか？購入予定からも削除されます。'))return;await req(st('cards','readwrite').delete(c.id));selectedCardId=null;await load();paintCollection()};
 }
 $('toggleWanted').onclick=async()=>{const c=cards.find(x=>x.id===selectedCardId);if(!c)return;c.wanted=!c.wanted;await saveCard(c);openCardDetail(c.id);$('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(x=>x.wanted).length;};
 function escapeHtml(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function searchOfficialCards(q){
- // Official card search accepts its search state in the v query parameter.
- // Do not use the old "suggest:on" mode: it is an autocomplete hint, not a result list.
+ // Search the official site's result page, then read each official detail page.
+ // The search page may be converted to Markdown with broken image/link syntax,
+ // so use it only to collect detail URLs; obtain title/collector number from each detail page.
  const payload={keyword:q,keyword_type:['card_name'],pagenum:'1',samename:'show',sort:'release_new'};
  const target='https://dm.takaratomy.co.jp/card/?v='+encodeURIComponent(JSON.stringify(payload));
  const md=await fetchReader(target);
- const found=[];
- const add=(name,url)=>{
-  name=cleanText(name).replace(/^#+\s*/,'').replace(/\s*\|.*$/,'').trim();
-  try{const u=new URL(url);if(u.hostname!=='dm.takaratomy.co.jp'||!u.pathname.startsWith('/card/detail/'))return;u.hash='';
-   if(name && !/^(カード検索|詳細|画像|DM\s*\/?)$/i.test(name) && !found.some(x=>x.url===u.href))found.push({name,url:u.href});
-  }catch{}
- };
- // Jina Reader normally represents official result links as Markdown links.
- const mdLink=/\[([^\]]{1,100})\]\((https?:\/\/dm\.takaratomy\.co\.jp\/card\/detail\/?\?id=[^)\s]+)\)/g;let m;
- while((m=mdLink.exec(md))&&found.length<30)add(m[1],m[2]);
- // Some reader responses expose the href and title on separate lines.
- if(!found.length){
-  const lines=String(md).split(/\n/);
-  for(let i=0;i<lines.length;i++){
-   const urlMatch=lines[i].match(/https?:\/\/dm\.takaratomy\.co\.jp\/card\/detail\/?\?id=[^\s)]+/);
-   if(urlMatch){const prev=lines.slice(Math.max(0,i-2),i+1).join(' ').replace(/\[[^\]]*\]/g,' ').trim();add(prev,urlMatch[0]);}
-  }
- }
- return found.slice(0,20);
+ const urls=[];const urlRe=/https?:\/\/dm\.takaratomy\.co\.jp\/card\/detail\/?\?id=[a-z0-9-]+/gi;let m;
+ while((m=urlRe.exec(md))&&urls.length<20){try{const u=new URL(m[0]);if(!urls.includes(u.href))urls.push(u.href)}catch{}}
+ // Relative URLs are also emitted by some official-site result layouts.
+ const relRe=/\/card\/detail\/?\?id=[a-z0-9-]+/gi;
+ while((m=relRe.exec(md))&&urls.length<20){const u='https://dm.takaratomy.co.jp'+m[0];if(!urls.includes(u))urls.push(u)}
+ const results=await Promise.all(urls.slice(0,12).map(async url=>{
+  try{
+   const detail=await fetchReader(url);
+   const card=extractOfficialMarkdown(detail,url);
+   const id=new URL(url).searchParams.get('id')||'';
+   const thumb=(detail.match(/https?:\/\/dm\.takaratomy\.co\.jp\/wp-content\/card\/cardthumb\/[a-z0-9-]+\.(?:jpg|png|webp)/i)||[])[0]
+    ||card.image||officialCardImage(url);
+   const number=card.number||'';
+   const name=(card.name||'').trim();
+   if(!name||/^(カード検索|商品情報|画像|詳細)$/.test(name))return null;
+   return {name,number,url,image:thumb};
+  }catch{return null}
+ }));
+ return results.filter(Boolean);
 }
 $('officialSearchButton').onclick=async()=>{
  const q=$('officialSearchInput').value.trim();$('officialSearchResults').innerHTML='';
@@ -266,7 +275,7 @@ $('officialSearchButton').onclick=async()=>{
  try{
   const results=await searchOfficialCards(q);
   $('officialSearchStatus').textContent=results.length?`${results.length}件の候補が見つかりました。`:'公式検索結果から候補を取得できませんでした。下のURL欄に公式カードページのURLを貼り付けてください。';
-  $('officialSearchResults').innerHTML=results.map((r,i)=>`<div class="official-result"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('');
+  $('officialSearchResults').innerHTML=results.map((r,i)=>`<div class="official-result"><div class="official-result-main">${r.image?`<img class="official-result-thumb" src="${escapeAttr(r.image)}" alt="" loading="lazy">`:''}<div class="official-result-title"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.number||'コレクター番号不明')}</small></div></div><small class="official-result-url">${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('');
   document.querySelectorAll('[data-copy-search]').forEach(b=>b.onclick=async()=>{const r=results[+b.dataset.copySearch];try{await navigator.clipboard.writeText(r.url);b.textContent='コピーしました';}catch{$('sourceUrl').value=r.url;b.textContent='URL欄に入力しました';}});
   document.querySelectorAll('[data-register-search]').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.registerSearch];$('sourceUrl').value=r.url;$('fetchPage').click();$('urlEntry').scrollIntoView({behavior:'smooth',block:'start'});});
  }catch(e){$('officialSearchStatus').textContent='公式検索との通信に失敗しました。時間をおいて再試行するか、下のURL欄をご利用ください。';}
