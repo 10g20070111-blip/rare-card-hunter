@@ -45,18 +45,26 @@ function extractFlavor(raw=''){
 function collectorFromOfficial(raw,url){
  const content=String(raw||'').replace(/\r/g,'');
  const id=new URL(url).searchParams.get('id')||'';
- const set=(id.match(/^dm(\d{2}[a-z]+\d+)/i)||[])[1]?.toUpperCase()||'';
- // The official card title contains the printed collector number in parentheses.
- // Restrict the search to the title/breadcrumb to avoid matching unrelated products.
- const titles=content.split('\n').filter(line=>/^\s*(?:#{1,4}\s+|\d+\.\s+|<title>)/.test(line)&&/[（(][^）)]+[）)]/.test(line));
- const normalize=number=>number.replace(/\s*\/\s*/g,'/').replace(/^DM/i,'').replace(/\s+/g,' ').trim();
- const pattern=/(?:DM)?(\d{2}[A-Z]+\d+)\s+((?:(?:超|秘|S|SP|P)?\d+|[A-Z]+\d+)\s*\/\s*(?:(?:超|秘|S|SP|P)?\d+|[A-Z]+\d+))/i;
- for(const line of titles){const m=line.match(pattern);if(m)return m[1].toUpperCase()+'  '+normalize(m[2]);}
- // The card URL itself gives the set but not the printed serial number.
- // Prefer numbers near the card name, never invent a serial number.
- const first=content.split('\n').slice(0,185).join('\n');
- const m=first.match(pattern);if(m)return m[1].toUpperCase()+'  '+normalize(m[2]);
- if(set){const m2=titles.join('\n').match(/((?:超|秘|S|SP|P)?\d+\s*\/\s*(?:超|秘|S|SP|P)?\d+)/i);if(m2)return set+'  '+normalize(m2[1]);}
+ const set=(id.match(/^dm(\d{2}(?:ex|rp|bd|sd)\d+)/i)||[])[1]?.toUpperCase()||'';
+ // Some editions use "PR5/PR10", "超45/超50", "S7/S11" and nonstandard separators.
+ const segment='(?:超|秘|PR|SP|SR|S|P)?\\d+';
+ const serial=new RegExp('('+segment+')\\s*[/／]\\s*('+segment+')','i');
+ const complete=new RegExp('(?:DM)?(\\d{2}(?:EX|RP|BD|SD)\\d+)\\s*[-:： ]*('+segment+'\\s*[/／]\\s*'+segment+')','i');
+ const normalize=v=>String(v).replace(/[／]/g,'/').replace(/\s*\/\s*/g,'/').trim().toUpperCase();
+ const lines=content.split('\n');
+ const priority=lines.filter(line=>
+   /(?:^#{1,4}\s|^Title:|^<title>|パンくず|コレクター番号|カード番号|収録番号)/i.test(line)||
+   (/[（(]/.test(line)&&/DM\d{2}/i.test(line))
+ );
+ for(const line of [...priority,...lines.slice(0,180)]){
+   const match=line.match(complete);
+   if(match)return match[1].toUpperCase()+'  '+normalize(match[2]);
+ }
+ // Only use a bare serial if it occurs in a title/number field and the set is in this URL.
+ if(set)for(const line of priority){
+   const m=line.match(serial);
+   if(m)return set+'  '+normalize(m[0]);
+ }
  return '';
 }
 function removeFlavorLabel(raw=''){
@@ -308,7 +316,7 @@ async function searchOfficialCards(q){
    const id=new URL(url).searchParams.get('id')||'';
    const thumb=(detail.match(/https?:\/\/dm\.takaratomy\.co\.jp\/wp-content\/card\/cardthumb\/[a-z0-9-]+\.(?:jpg|png|webp)/i)||[])[0]
     ||card.image||officialCardImage(url);
-   const number=card.number||'';
+   const number=card.number||collectorFromOfficial(vicinity,url)||'';
    const name=(card.name||'').trim();
    if(!name||/^(カード検索|商品情報|画像|詳細)$/.test(name))return null;
    return {name,number,url,image:thumb};
