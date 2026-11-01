@@ -14,10 +14,10 @@
 </nav>
 <main>
 <section class="page active" id="page-home">
-<div class="hero panel"><div class="hero-copy"><div class="eyebrow gold">WELCOME, HUNTER</div><h2>レアカードを、<br>見逃すな。</h2><p>あたしがカード探しをお手伝いするだわさ！</p></div><div id="guideImage" class="guide-placeholder">🐰</div></div>
+<div class="hero panel"><div class="hero-copy"><div class="eyebrow gold">WELCOME, HUNTER</div><h2>レアカードを、<br>見逃すな。</h2><p>わたしたちはレアカードハンター！</p></div><div id="guideImage" class="guide-placeholder">🐰</div></div>
 <div class="quick-grid"><button class="quick panel" data-page="search"><b>⌕</b><span>カードを探す</span><small>登録カードを検索</small></button><button class="quick panel" id="newCard"><b>＋</b><span>カードを登録</span><small>手動入力・画像追加</small></button></div>
 <div class="stats-grid"><div class="stat panel"><small>所持カード枚数</small><strong id="totalOwned">0</strong></div><div class="stat panel"><small>登録カード種類</small><strong id="totalCards">0</strong></div><div class="stat panel"><small>購入予定</small><strong id="totalWanted">0</strong></div></div>
-<div class="panel section-card"><div class="section-head"><h3>ハンターへのメッセージ</h3></div><p id="guideMessage">カード探しなら、あたしにまかせるだわさ！</p></div>
+<div class="panel section-card"><div class="section-head"><h3>ハンターへのメッセージ</h3></div><p id="guideMessage">わたしたちはレアカードハンター！</p></div>
 </section>
 <section class="page" id="page-search">
 <div class="section-head"><h2>カード検索</h2><div><a class="mini" href="https://dm.takaratomy.co.jp/card/" target="_blank" rel="noopener">公式検索 ↗</a> <a class="mini" href="https://dmwiki.net/" target="_blank" rel="noopener">DM Wiki ↗</a> <button class="primary small" id="addFromSearch">＋ 登録</button></div></div>
@@ -31,9 +31,9 @@
 </div>
 <dialog id="cardDialog"><form method="dialog" id="cardForm"><div class="dialog-head"><h2 id="formTitle">カード登録</h2><button class="icon-btn" value="cancel" aria-label="閉じる">×</button></div>
 <input type="hidden" id="cardId">
-<label>カード名 <em>*必須</em><input id="name" required maxlength="120" placeholder="例：ボルメテウス・ホワイト・ドラゴン"></label>
+<label>カード名 <em>*必須</em><input id="name" required maxlength="120" autocomplete="off" placeholder="例：ボルメテウス・ホワイト・ドラゴン"><div id="nameSuggestions" class="name-suggestions" hidden></div></label>
 <div class="form-grid"><label>型番・カード番号<input id="number" maxlength="80"></label><label>文明<select id="civil"><option value="">未設定</option><option>光</option><option>水</option><option>闇</option><option>火</option><option>自然</option><option>ゼロ</option><option>多色</option></select></label><label>コスト<input id="cost" type="number" min="0"></label><label>レアリティ<input id="rarity"></label><label>種族<input id="race"></label><label>カードタイプ<input id="type"></label><label>所持枚数<input id="owned" type="number" min="0" value="0"></label><label>購入予定枚数<input id="wantQty" type="number" min="1" value="1"></label></div>
-<label>カードテキスト<textarea id="text" rows="3"></textarea></label><label>公式カードページURL<input id="url" type="url" placeholder="https://dm.takaratomy.co.jp/..."></label><label>個人的なメモ<textarea id="memo" rows="2"></textarea></label><div class="scan-panel"><h3>カード画像から情報を読み取る</h3><p class="hint">カード画像を選び、OCRで文字を読み取ります。結果を確認してから登録してください。</p><label>カード画像をアップロード<input id="cardImage" type="file" accept="image/*" capture="environment"></label><div id="imagePreview" class="image-preview"></div><button type="button" class="secondary full" id="runOcr">画像から文字を読み取る</button><p id="ocrStatus" class="hint">日本語OCRは初回に追加データを読み込むため、通信量と時間がかかります。</p><div id="ocrResult" class="ocr-result" hidden></div><div id="matchLinks" class="match-links" hidden></div></div>
+<label>カードテキスト<textarea id="text" rows="3"></textarea></label><label>公式カードページURL<input id="url" type="url" placeholder="https://dm.takaratomy.co.jp/..."></label><label>個人的なメモ<textarea id="memo" rows="2"></textarea></label><div class="scan-panel"><h3>カード画像から情報を読み取る</h3><p class="hint">カード画像を選び、OCRで文字を読み取ります。結果を確認してから登録してください。</p><label>端末のフォト・写真からカード画像を選択<input id="cardImage" type="file" accept="image/*"></label><p class="hint">Androidの写真選択画面・Googleフォト・端末のファイルアプリなどから画像を選べます。表示される選択肢は端末の設定によって異なります。</p><div id="imagePreview" class="image-preview"></div><button type="button" class="secondary full" id="runOcr">画像から文字を読み取る</button><p id="ocrStatus" class="hint">日本語OCRは初回に追加データを読み込むため、通信量と時間がかかります。</p><div id="ocrResult" class="ocr-result" hidden></div><div id="matchLinks" class="match-links" hidden></div></div>
 <div class="check-row"><label class="check"><input id="wanted" type="checkbox"> 購入リストに追加</label></div>
 <div class="form-actions"><button type="button" class="secondary" id="fetchOfficial">URLから情報・カード画像を取得</button><button class="primary" id="saveCard">保存する</button></div><button type="button" class="danger full" id="deleteCard" hidden>このカードを削除</button><p class="hint" id="fetchStatus">自動取得は公式サイトの公開仕様・ブラウザ制約により失敗する場合があります。失敗時は手入力してください。</p>
 </form></dialog>
