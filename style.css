@@ -29,3 +29,5 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 .official-result-title b{font-size:15px;line-height:1.45;overflow-wrap:anywhere}
 .official-result-title small{font-size:12px;margin-top:5px}
 .official-result-url{overflow-wrap:anywhere;font-size:10px!important}
+
+.search-collapse{margin-top:1rem}.search-collapse summary{cursor:pointer;padding:1rem;background:#28243c;border:1px solid #615777;border-radius:12px;font-weight:700}.search-collapse[open] summary{margin-bottom:1rem}.text-block p,.detail-text p{white-space:pre-wrap}
