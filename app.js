@@ -94,6 +94,67 @@ async function fetchReader(url){
  if(!response.ok)throw Error('Reader HTTP '+response.status);
  return await response.text();
 }
+
+function officialCardImage(url){
+ try{
+  const u=new URL(url); if(u.hostname!=='dm.takaratomy.co.jp')return '';
+  const id=u.searchParams.get('id'); if(!id || !/^[a-z0-9-]+$/i.test(id))return '';
+  return `https://dm.takaratomy.co.jp/wp-content/card/cardimage/${encodeURIComponent(id)}.jpg`;
+ }catch{return ''}
+}
+function extractOfficialMarkdown(md,url){
+ const lines=String(md||'').replace(/\r/g,'').split('\n');
+ const titleLine=lines.find(x=>/^#{1,3}\s+/.test(x) && /[（(].*S\d+\/S\d+/.test(x)) || '';
+ const title=(titleLine.replace(/^#+\s*/,'').split(/[（(]/)[0]||'').trim();
+ const all=lines.join('\n');
+ const row=(label)=>{
+  const re=new RegExp('(?:^|\\n)\\s*\\|?\\s*'+label+'\\s*\\|\\s*([^\\n|]+)','m');
+  return (all.match(re)||[])[1]?.trim()||'';
+ };
+ let cost=row('コスト').match(/[0-9]+/)?.[0]||'';
+ let number=(titleLine.match(/(S\d+\/S\d+)/i)||all.match(/(S\d+\/S\d+)/i)||[])[1]||'';
+ let text='';
+ const start=lines.findIndex(x=>/特殊能力|カードの能力/.test(x.replace(/^#+\s*/,'')));
+ if(start>=0){
+  const block=[];
+  for(let i=start+1;i<lines.length;i++){
+   const x=lines[i].trim();
+   if(/^(?:フレーバー|関連カード|収録情報|よくある質問|商品情報|カードのFAQ)/.test(x.replace(/^#+\s*/,'')))break;
+   if(/^#{1,4}\s/.test(x) && block.length)break;
+   if(!x || /^[-*_]{3,}$/.test(x))continue;
+   let v=x.replace(/^>\s*/,'').replace(/^[-*+]\s*/,'').trim();
+   v=v.replace(/!\[[^\]]*\]\([^)]*\)/g,'').replace(/\[([^\]]*)\]\([^)]*\)/g,'$1');
+   if(v && !/^(特殊能力|カードの能力)$/.test(v))block.push(v);
+  }
+  text=cleanText(block.join('\n'));
+ }
+ // Official card pages publish the image with a predictable ID-based JPEG path.
+ const image=officialCardImage(url);
+ const civilization=row('文明'), type=row('カードの種類'), rarity=row('レアリティ'), power=row('パワー'), race=row('種族');
+ return {name:title,cost,number,text,image,url,type,civilization,rarity,power,race};
+}
+function extractWikiOnlyCardText(md){
+ const lines=String(md||'').replace(/\r/g,'').split('\n');
+ const stop=/^(解説|評価|環境|関連カード|収録|フレーバー|備考|余談|デッキ|プレイング|元ネタ|参考|外部リンク|FAQ)/;
+ // Prefer a clearly labelled card text/effect section and stop before strategy or commentary sections.
+ let start=lines.findIndex(x=>/^(?:#{1,5}\s*)?(カードテキスト|能力|効果|テキスト)\s*[:：]?\s*$/.test(x.trim()));
+ if(start<0){
+  start=lines.findIndex(x=>/^(?:#{1,5}\s*)?(カードの効果|能力欄)\s*[:：]?\s*$/.test(x.trim()));
+ }
+ if(start<0)return '';
+ const out=[];
+ for(let i=start+1;i<lines.length;i++){
+  const x=lines[i].trim();
+  if(stop.test(x.replace(/^#+\s*/,'')))break;
+  if(/^#{1,5}\s/.test(x) && out.length)break;
+  if(!x || /^[-*_]{3,}$/.test(x))continue;
+  if(/(このカード|このクリーチャー|ブロッカー|スピードアタッカー|マッハファイター|シールド|コスト)/.test(x)){
+   out.push(x.replace(/^>\s*/,'').replace(/^[-*+]\s*/,'').replace(/!\[[^\]]*\]\([^)]*\)/g,'').trim());
+  }
+ }
+ return cleanText(out.join('\n'));
+}
+
 $('fetchPage').onclick=async()=>{
  const url=validUrl($('sourceUrl').value.trim());
  if(!url){$('fetchStatus').textContent='公式サイトまたはdmwiki.netのHTTPSカード詳細URLを入力してください。';return}
@@ -101,7 +162,10 @@ $('fetchPage').onclick=async()=>{
  try{
   const body=await fetchReader(url.href);
   let parsed;
-  if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href)}else parsed=markdownData(body,url.href);
+  const isOfficial=url.hostname==='dm.takaratomy.co.jp';
+  if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v))};}}
+  else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v))};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
+  if(isOfficial){const exactImage=officialCardImage(url.href);if(exactImage)parsed.image=exactImage;}
   if(!parsed.name&&!parsed.text&&!parsed.image&&!parsed.cost&&!parsed.number)throw Error('ページからカード情報を抽出できませんでした');
   draft={...parsed,url:url.href};renderPreview();
   const missing=[];if(!draft.name)missing.push('カード名');if(!draft.cost)missing.push('コスト');if(!draft.number)missing.push('コレクター番号');if(!draft.text)missing.push('テキスト');if(!draft.image)missing.push('画像');
