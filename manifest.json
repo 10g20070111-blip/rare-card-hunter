@@ -1,0 +1,19 @@
+{
+  "name": "RARE CARD HUNTER",
+  "short_name": "CARD HUNTER",
+  "description": "デュエル・マスターズ 個人用カード管理アプリ",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#111018",
+  "theme_color": "#111018",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
