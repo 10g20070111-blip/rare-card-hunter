@@ -1,11 +1,11 @@
-const DB_NAME='rare-card-hunter',DB_VERSION=1;let db,cards=[],settings={message:'わたしたちはレアカードハンター！',bubble:true,characterSize:120,tone:'dawasa',character:null};let draft=null,editedImage=null,activeCollectionTab='registered',selectedCardId=null;
+const DB_NAME='rare-card-hunter',DB_VERSION=1;let db,cards=[],settings={message:'わたしたちはレアカードハンター！',bubble:true,characterSize:120,tone:'dawasa',character:null};let draft=null,editedImage=null,activeCollectionTab='registered',selectedCardId=null,sortKey='added',sortDirection='desc',searchQuery='';
 const $=id=>document.getElementById(id);const req=r=>new Promise((ok,no)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});
 function openDB(){return new Promise((ok,no)=>{const r=indexedDB.open(DB_NAME,DB_VERSION);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('cards'))d.createObjectStore('cards',{keyPath:'id'});if(!d.objectStoreNames.contains('settings'))d.createObjectStore('settings',{keyPath:'key'})};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)})}function st(n,m='readonly'){return db.transaction(n,m).objectStore(n)}
 async function load(){cards=await req(st('cards').getAll());const s=await req(st('settings').getAll());s.forEach(x=>settings[x.key]=x.value);settings.message??='わたしたちはレアカードハンター！';settings.bubble??=true;settings.characterSize??=120;settings.tone??='dawasa';paintHome();paintSettings()}
 async function saveSetting(k,v){settings[k]=v;await req(st('settings','readwrite').put({key:k,value:v}))}async function saveCard(c){await req(st('cards','readwrite').put(c));await load()}
-function show(id){document.querySelectorAll('.screen').forEach(x=>x.classList.toggle('active',x.id===id))}document.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>show('home'));$('goRegister').onclick=()=>{show('register');resetRegister()};$('goWishlist').onclick=()=>{show('wishlist');activeCollectionTab='registered';paintCollection()};$('goSettings').onclick=()=>{show('settings');paintSettings()};
+function show(id){document.querySelectorAll('.screen').forEach(x=>x.classList.toggle('active',x.id===id))}document.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>show('home'));$('goRegister').onclick=()=>{show('register');resetRegister()};$('goWishlist').onclick=()=>{show('wishlist');activeCollectionTab='registered';searchQuery='';$('collectionSearch').value='';paintCollection()};$('goSettings').onclick=()=>{show('settings');paintSettings()};
 function paintHome(){$('mainMessage').textContent=settings.message||'わたしたちはレアカードハンター！';$('cardCount').textContent=`登録カード ${cards.length}枚`;$('wishSummary').textContent=`購入予定 ${cards.filter(c=>c.wanted).length}種類`;$('character').style.width=settings.characterSize+'px';$('character').style.height=Math.round(settings.characterSize*1.15)+'px';$('character').innerHTML=settings.character?`<img src="${settings.character}" alt="ナビゲーター">`:'🐰';$('bubble').classList.toggle('hidden',!settings.bubble);$('bubble').textContent=phrase('ホームへようこそ！')}
-function phrase(s){if(settings.tone==='polite')return s.replace(/だわさ/g,'です').replace(/！/g,'。');if(settings.tone==='simple')return 'カードを登録してみよう！';return s.endsWith('だわさ')?s:s+'だわさ'}
+function phrase(s){if(settings.tone==='ojou')return 'ごきげんよう！カード探しのお手伝いをいたしますわ。';if(settings.tone==='polite')return s.replace(/だわさ/g,'です').replace(/！/g,'。');if(settings.tone==='simple')return 'カードを登録してみよう！';return s.endsWith('だわさ')?s:s+'だわさ'}
 function paintSettings(){$('settingMessage').value=settings.message||'';$('bubbleToggle').checked=!!settings.bubble;$('characterSize').value=settings.characterSize||120;$('sizeValue').textContent=(settings.characterSize||120)+'px';$('navigatorTone').value=settings.tone||'dawasa'}$('characterSize').oninput=e=>$('sizeValue').textContent=e.target.value+'px';
 $('saveSettings').onclick=async()=>{await saveSetting('message',$('settingMessage').value.trim()||'わたしたちはレアカードハンター！');await saveSetting('bubble',$('bubbleToggle').checked);await saveSetting('characterSize',+$('characterSize').value);await saveSetting('tone',$('navigatorTone').value);paintHome();alert('設定を保存しました。')};
 function resetRegister(){$('sourceUrl').value='';$('fetchStatus').textContent='';$('previewPanel').hidden=true;$('editPanel').hidden=true;$('urlEntry').hidden=false;draft=null;editedImage=null;$('previewWanted').checked=false}
@@ -104,8 +104,9 @@ function officialCardImage(url){
 }
 function extractOfficialMarkdown(md,url){
  const lines=String(md||'').replace(/\r/g,'').split('\n');
- const titleLine=lines.find(x=>/^#{1,3}\s+/.test(x) && /[（(].*S\d+\/S\d+/.test(x)) || '';
- const title=(titleLine.replace(/^#+\s*/,'').split(/[（(]/)[0]||'').trim();
+ const titleLine=lines.find(x=>/^#{1,3}\s+/.test(x) && /[（(].*(?:S\d+\/S\d+|DM[A-Z0-9-]+\s+\d+\/\d+)/i.test(x)) || '';
+ const heading=titleLine||lines.find(x=>/^#{1,3}\s+/.test(x)&&/(?:カード|DMEX|DM\d)/i.test(x))||'';
+ const title=(heading.replace(/^#+\s*/,'').split(/[（(]/)[0]||'').replace(/\s*[|｜-]\s*デュエル・マスターズ.*$/,'').trim();
  const all=lines.join('\n');
  const row=(label)=>{
   const re=new RegExp('(?:^|\\n)\\s*\\|?\\s*'+label+'\\s*\\|\\s*([^\\n|]+)','m');
@@ -174,26 +175,59 @@ $('fetchPage').onclick=async()=>{
  }catch(e){$('fetchStatus').textContent='自動取得に失敗しました。通信制限、外部読み取りサービスの応答、またはページ形式が原因の可能性があります。時間をおいて再試行するか、「編集する」から入力してください。';}
  finally{$('fetchPage').disabled=false}
 };
-function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').textContent=draft.name||'カード名を取得できません';$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=draft.text||'—';$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div><dt>${k}</dt><dd>${escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
+function raceMarkup(value=''){return escapeHtml(value).replace(/\s*\/\s*/g,'<wbr>/') }
+function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').textContent=draft.name||'カード名を取得できません';$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=draft.text||'—';$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
 function escapeAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 $('editPreview').onclick=()=>{$('editPanel').hidden=false;$('previewPanel').hidden=true;$('editName').value=draft.name;$('editCost').value=draft.cost;$('editNumber').value=draft.number;$('editType').value=draft.type||'';$('editCivilization').value=draft.civilization||'';$('editRarity').value=draft.rarity||'';$('editPower').value=draft.power||'';$('editRace').value=draft.race||'';$('editText').value=draft.text;$('editImageUrl').value=draft.image;$('editImagePreview').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}">`:''};$('backToPreview').onclick=renderPreview;
 $('editImageFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;editedImage=await imageData(f);$('editImagePreview').innerHTML=`<img src="${editedImage}">`};$('applyEdit').onclick=()=>{draft.name=$('editName').value.trim();draft.cost=$('editCost').value.trim();draft.number=$('editNumber').value.trim();draft.type=$('editType').value.trim();draft.civilization=$('editCivilization').value.trim();draft.rarity=$('editRarity').value.trim();draft.power=$('editPower').value.trim();draft.race=$('editRace').value.trim();draft.text=$('editText').value;draft.image=$('editImageUrl').value.trim();if(editedImage)draft.image=editedImage;renderPreview()};
 $('cancelPreview').onclick=()=>{if(confirm('取得した内容を破棄しますか？'))resetRegister()};$('confirmSave').onclick=async()=>{if(!draft?.name){alert('カード名がありません。「編集する」からカード名を入力してください。');return}const c={id:crypto.randomUUID(),name:draft.name,cost:draft.cost,number:draft.number,text:draft.text,image:draft.image||null,url:draft.url,type:draft.type||'',civilization:draft.civilization||'',rarity:draft.rarity||'',power:draft.power||'',race:draft.race||'',owned:0,wanted:$('previewWanted').checked,wantQty:1,createdAt:new Date().toISOString()};await saveCard(c);alert('カードを登録しました！');show('home');resetRegister()};
 function imageData(file){return new Promise((ok,no)=>{if(!file.type.startsWith('image/'))return no(Error('画像ファイルを選択してください'));const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const cv=document.createElement('canvas'),scale=Math.min(1,1200/Math.max(im.width,im.height));cv.width=im.width*scale;cv.height=im.height*scale;cv.getContext('2d').drawImage(im,0,0,cv.width,cv.height);ok(cv.toDataURL('image/jpeg',.82))};im.onerror=no;im.src=r.result};r.onerror=no;r.readAsDataURL(file)})}
 $('characterFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await saveSetting('character',await imageData(f));paintHome()}catch(err){alert(err.message)}};
+function civilizationRanks(value=''){
+ const order=['火','水','闇','光','自然','無色'];
+ const found=order.filter(x=>String(value).includes(x));
+ return found.length?found.map(x=>order.indexOf(x)):[5];
+}
+function compareCivilization(a,b){
+ const aa=civilizationRanks(a.civilization),bb=civilizationRanks(b.civilization);
+ for(let i=0;i<Math.max(aa.length,bb.length);i++){const av=aa[i]??-1,bv=bb[i]??-1;if(av!==bv)return av-bv;}
+ return 0;
+}
+function sortedCards(list){
+ const arr=[...list];
+ if(sortKey==='civilization')return arr.sort(compareCivilization);
+ const sign=sortDirection==='asc'?1:-1;
+ return arr.sort((a,b)=>{
+  let result=0;
+  if(sortKey==='cost')result=(Number.parseInt(a.cost,10)||0)-(Number.parseInt(b.cost,10)||0);
+  else if(sortKey==='name')result=String(a.name||'').localeCompare(String(b.name||''),'ja');
+  else result=String(a.createdAt||'').localeCompare(String(b.createdAt||''));
+  return result*sign;
+ });
+}
 function paintCollection(){
  $('collectionItems').hidden=false;$('cardDetail').hidden=true;
  $('tabRegistered').classList.toggle('active',activeCollectionTab==='registered');$('tabWishlist').classList.toggle('active',activeCollectionTab==='wishlist');
  $('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(c=>c.wanted).length;
- const list=activeCollectionTab==='wishlist'?cards.filter(c=>c.wanted):cards;
- $('collectionItems').innerHTML=list.length?list.map(c=>`<button class="collection-card" data-open-card="${escapeAttr(c.id)}"><span class="collection-thumb">${c.image?`<img src="${escapeAttr(c.image)}" alt="">`:'画像なし'}</span><span class="collection-info"><b>${escapeHtml(c.name)}</b><small>コスト：${escapeHtml(c.cost||'—')}　／　番号：${escapeHtml(c.number||'—')}</small><small>${c.wanted?'♡ 購入予定':'登録済み'}</small></span><span class="chevron">›</span></button>`).join(''):'<div class="empty">'+(activeCollectionTab==='wishlist'?'購入予定のカードはありません。登録したカードの詳細から追加できます。':'登録したカードはまだありません。カードを登録してみましょう。')+'</div>';
+ const controls=$('collectionControls');controls.hidden=activeCollectionTab!=='registered';
+ const query=searchQuery.trim().toLocaleLowerCase();
+ let list=activeCollectionTab==='wishlist'?cards.filter(c=>c.wanted):cards;
+ if(query)list=list.filter(c=>[c.name,c.cost,c.number,c.text,c.type,c.civilization,c.rarity,c.power,c.race].some(v=>String(v||'').toLocaleLowerCase().includes(query)));
+ if(activeCollectionTab==='registered')list=sortedCards(list);
+ $('sortOrder').value=sortKey;$('sortAsc').classList.toggle('selected',sortDirection==='asc');$('sortDesc').classList.toggle('selected',sortDirection==='desc');
+ $('sortAsc').disabled=sortKey==='civilization';$('sortDesc').disabled=sortKey==='civilization';
+ $('collectionItems').innerHTML=list.length?list.map(c=>`<button class="collection-card" data-open-card="${escapeAttr(c.id)}"><span class="collection-thumb">${c.image?`<img src="${escapeAttr(c.image)}" alt="">`:'画像なし'}</span><span class="collection-info"><b>${escapeHtml(c.name)}</b><small>コスト：${escapeHtml(c.cost||'—')}　／　番号：${escapeHtml(c.number||'—')}</small><small>${c.wanted?'♡ 購入予定':'登録済み'}</small></span><span class="chevron">›</span></button>`).join(''):'<div class="empty">'+(query?'該当するカードはありません。検索語を変えてみてください。':(activeCollectionTab==='wishlist'?'購入予定のカードはありません。登録したカードの詳細から追加できます。':'登録したカードはまだありません。カードを登録してみましょう。'))+'</div>';
  document.querySelectorAll('[data-open-card]').forEach(b=>b.onclick=()=>openCardDetail(b.dataset.openCard));
 }
+$('collectionSearch').oninput=e=>{searchQuery=e.target.value;paintCollection()};
+$('sortOrder').onchange=e=>{sortKey=e.target.value;paintCollection()};
+$('sortAsc').onclick=()=>{if(sortKey==='civilization')return;sortDirection='asc';paintCollection()};
+$('sortDesc').onclick=()=>{if(sortKey==='civilization')return;sortDirection='desc';paintCollection()};
 $('tabRegistered').onclick=()=>{activeCollectionTab='registered';paintCollection()};$('tabWishlist').onclick=()=>{activeCollectionTab='wishlist';paintCollection()};
 $('backToCollection').onclick=()=>{selectedCardId=null;paintCollection()};
 function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;selectedCardId=id;$('collectionItems').hidden=true;$('cardDetail').hidden=false;
  const rows=[['コスト',c.cost],['コレクター番号',c.number],['カードタイプ',c.type],['文明',c.civilization],['レアリティ',c.rarity],['パワー',c.power],['種族',c.race]];
- $('detailContent').innerHTML=`<h2>${escapeHtml(c.name)}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div><dt>${k}</dt><dd>${escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(c.text||'—')}</p></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p>`;
+ $('detailContent').innerHTML=`<h2>${escapeHtml(c.name)}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(c.text||'—')}</p></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p>`;
  $('toggleWanted').textContent=c.wanted?'購入予定から外す':'購入予定に追加';
 }
 $('toggleWanted').onclick=async()=>{const c=cards.find(x=>x.id===selectedCardId);if(!c)return;c.wanted=!c.wanted;await saveCard(c);openCardDetail(c.id);$('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(x=>x.wanted).length;};
