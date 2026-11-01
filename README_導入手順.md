@@ -6,7 +6,7 @@ RARE CARD HUNTER v2.6.0
 3. rare_card_hunter フォルダ内のファイルを、GitHubリポジトリ直下の同名ファイルへ上書きしてください。
    index.html / app.js / style.css / service-worker.js / manifest.json / icon.svg
 4. GitHubで変更をコミットします。
-5. 公開サイトを開き直し、画面下部が VERSION 2.6.0 になったことを確認してください。
+5. 公開サイトを開き直し、画面下部が VERSION 2.12.0 になったことを確認してください。
 6. 古い画面が残る場合は、サイトを開いた状態でブラウザの再読み込みを行い、必要ならアプリを完全終了して再起動してください。
 
 【カード情報取得について】

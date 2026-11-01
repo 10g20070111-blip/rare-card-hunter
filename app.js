@@ -42,16 +42,17 @@ function extractFlavor(raw=''){
  return cleanText(out.join('\n'));
 }
 function collectorFromOfficial(raw,url){
- const lines=String(raw).split('\n');
- const headings=lines.filter(x=>/^\s*(?:#{1,4}\s*)?[^\n]{2,110}[（(][^\n]{1,75}[）)]/.test(x));
- const scope=headings.join('\n')+'\n'+lines.slice(0,110).join('\n');
- const m=scope.match(/(?:DM\s*)?((?:\d{2}[- ]?(?:RP|EX|BD|SD|P|SP)\d*|DMEX\d+|DM\d+[A-Z0-9-]*))\s+((?:[A-Z]{0,4}\d+|S\d+)\s*\/\s*(?:[A-Z]{0,4}\d+|S\d+))/i);
- if(m)return m[1].toUpperCase().replace(/^DM(?=\d)/,'')+'  '+m[2].toUpperCase().replace(/\s/g,'');
- const plain=scope.match(/\b((?:S\d+|\d+)\s*\/\s*(?:S\d+|\d+))\b/i);
+ const lines=String(raw||'').split('\n');
+ const heading=lines.filter(x=>/^\s*(?:#{1,4}\s*)?[^\n]{2,160}[（(][^\n]{1,100}[）)]/.test(x)).join('\n');
+ const scope=heading+'\n'+lines.slice(0,170).join('\n');
  const id=new URL(url).searchParams.get('id')||'';
- const set=id.match(/^dm(\d{2}(?:rp|ex|bd|sd)\d+)-/i);
- if(plain&&set)return set[1].toUpperCase()+'  '+plain[1].toUpperCase().replace(/\s/g,'');
- // Never invent a printed denominator from the URL alone.
+ const set=(id.match(/^dm(\d{2}(?:rp|ex|bd|sd)\d+)/i)||[])[1]?.toUpperCase()||'';
+ // Some collector numbers contain Japanese prefixes, e.g. 超45/超50.
+ const re=/(?:DM)?(\d{2}(?:RP|EX|BD|SD)\d+)\s+(?:[A-Z]{1,3}\s+)?((?:超|秘|S|SP|P)?\d+\s*\/\s*(?:超|秘|S|SP|P)?\d+)/i;
+ const m=scope.match(re);
+ if(m)return m[1].toUpperCase()+'  '+m[2].replace(/\s/g,'').toUpperCase();
+ const number=scope.match(/((?:超|秘|S|SP|P)?\d+\s*\/\s*(?:超|秘|S|SP|P)?\d+)/i);
+ if(number&&set)return set+'  '+number[1].replace(/\s/g,'').toUpperCase();
  return '';
 }
 function extractTextFromDom(doc){
@@ -156,7 +157,7 @@ function extractOfficialMarkdown(md,url){
  };
  let cost=row('コスト').match(/[0-9]+/)?.[0]||'';
  let number=(titleLine.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||all.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||[])[1]||'';
- if(!number)number=collectorFromOfficial(md,url);
+ number=collectorFromOfficial(md,url)||number;
  const idPart=new URL(url).searchParams.get('id')||'';const setMatch=idPart.match(/^dm(\d{2}[a-z0-9]+)-s\d+$/i);if(setMatch&&number)number=setMatch[1].toUpperCase()+'  '+number.toUpperCase();
  let text='';
  const start=lines.findIndex(x=>/特殊能力|カードの能力/.test(x.replace(/^#+\s*/,'')));
@@ -219,7 +220,7 @@ $('fetchPage').onclick=async()=>{
  finally{$('fetchPage').disabled=false}
 };
 function raceMarkup(value=''){return escapeHtml(value).replace(/\s*\/\s*/g,'<wbr>/') }
-function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').textContent=draft.name||'カード名を取得できません';$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=normalizeRules(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
+function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').innerHTML=escapeHtml(draft.name||'カード名を取得できません')+(draft.number?' <small class="name-number">('+escapeHtml(draft.number)+')</small>':'');$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=normalizeRules(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
 function escapeAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 $('editPreview').onclick=()=>{$('editPanel').hidden=false;$('previewPanel').hidden=true;$('editName').value=draft.name;$('editCost').value=draft.cost;$('editNumber').value=draft.number;$('editType').value=draft.type||'';$('editCivilization').value=draft.civilization||'';$('editRarity').value=draft.rarity||'';$('editPower').value=draft.power||'';$('editRace').value=draft.race||'';$('editText').value=draft.text;$('editFlavor').value=draft.flavor||'';$('editImageUrl').value=draft.image;$('editImagePreview').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}">`:''};$('backToPreview').onclick=renderPreview;
 $('editImageFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;editedImage=await imageData(f);$('editImagePreview').innerHTML=`<img src="${editedImage}">`};$('applyEdit').onclick=()=>{draft.name=$('editName').value.trim();draft.cost=$('editCost').value.trim();draft.number=$('editNumber').value.trim();draft.type=$('editType').value.trim();draft.civilization=$('editCivilization').value.trim();draft.rarity=$('editRarity').value.trim();draft.power=$('editPower').value.trim();draft.race=$('editRace').value.trim();draft.text=normalizeRules($('editText').value);draft.flavor=$('editFlavor').value.trim();draft.image=$('editImageUrl').value.trim();if(editedImage)draft.image=editedImage;renderPreview()};
@@ -271,7 +272,7 @@ $('tabRegistered').onclick=()=>{activeCollectionTab='registered';paintCollection
 $('backToCollection').onclick=()=>{selectedCardId=null;paintCollection()};
 function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;selectedCardId=id;$('collectionItems').hidden=true;$('cardDetail').hidden=false;
  const rows=[['コスト',c.cost],['コレクター番号',c.number],['カードタイプ',c.type],['文明',c.civilization],['レアリティ',c.rarity],['パワー',c.power],['種族',c.race]];
- $('detailContent').innerHTML=`<h2>${escapeHtml(c.name)}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(normalizeRules(c.text)||'—')}</p></section>${c.flavor?`<section class="detail-text"><b>フレーバー</b><p>${escapeHtml(c.flavor)}</p></section>`:''}<p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;
+ $('detailContent').innerHTML=`<h2>${escapeHtml(c.name)}${c.number?` <small class="name-number">(${escapeHtml(c.number)})</small>`:''}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(normalizeRules(c.text)||'—')}</p></section>${c.flavor?`<section class="detail-text"><b>フレーバー</b><p>${escapeHtml(c.flavor)}</p></section>`:''}<p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;
  $('toggleWanted').textContent=c.wanted?'購入予定から外す':'購入予定に追加';$('deleteCard').onclick=async()=>{if(!confirm('このカードを登録一覧から削除しますか？購入予定からも削除されます。'))return;await req(st('cards','readwrite').delete(c.id));selectedCardId=null;await load();paintCollection()};
 }
 $('toggleWanted').onclick=async()=>{const c=cards.find(x=>x.id===selectedCardId);if(!c)return;c.wanted=!c.wanted;await saveCard(c);openCardDetail(c.id);$('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(x=>x.wanted).length;};
@@ -288,8 +289,13 @@ async function searchOfficialCards(q){
  // Relative URLs are also emitted by some official-site result layouts.
  const relRe=/\/card\/detail\/?\?id=[a-z0-9-]+/gi;
  while((m=relRe.exec(md))&&urls.length<20){const u='https://dm.takaratomy.co.jp'+m[0];if(!urls.includes(u))urls.push(u)}
- const results=await Promise.all(urls.slice(0,12).map(async url=>{
+ const results=await Promise.all(urls.slice(0,8).map(async url=>{
   try{
+   const pos=md.indexOf(url);
+   const vicinity=pos>=0?md.slice(Math.max(0,pos-350),Math.min(md.length,pos+450)):'';
+   const label=(vicinity.match(/\[([^\]\n]{3,90})\]\(https?:\/\/dm\.takaratomy\.co\.jp\/card\/detail/i)||[])[1]||'';
+   const nearbyNumber=(vicinity.match(/DM\d{2}(?:EX|RP|BD|SD)\d+\s+(?:超|秘|S)?\d+\/(?:超|秘|S)?\d+/i)||[])[0]||'';
+   if(label&&!/[!\[\]()*]/.test(label)&&nearbyNumber){return {name:label,number:nearbyNumber.replace(/^DM/i,'').replace(/\s+/, '  '),url,image:officialCardImage(url)};}
    const detail=await fetchReader(url);
    const card=extractOfficialMarkdown(detail,url);
    const id=new URL(url).searchParams.get('id')||'';

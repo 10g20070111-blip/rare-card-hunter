@@ -31,3 +31,6 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 .official-result-url{overflow-wrap:anywhere;font-size:10px!important}
 
 .search-collapse{margin-top:1rem}.search-collapse summary{cursor:pointer;padding:1rem;background:#28243c;border:1px solid #615777;border-radius:12px;font-weight:700}.search-collapse[open] summary{margin-bottom:1rem}.text-block p,.detail-text p{white-space:pre-wrap}
+
+.name-number{font-size:.55em;color:var(--muted);font-weight:600;display:inline;white-space:normal;vertical-align:baseline}
+.text-block:has(#previewFlavor){margin-top:14px}
