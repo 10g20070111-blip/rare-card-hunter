@@ -25,22 +25,41 @@ function normalizeRules(raw=''){
  let t=cleanCardRules(raw);
  // Reader Markdown often collapses several bullet abilities into one paragraph.
  t=t.replace(/\s+(?:\*|※|■)\s*(?=[^\s])/g,'\n■ ')
+   .replace(/\s*▶\s*/g,'\n  ▶ ')
    .replace(/(^|\n)\s*(?:\*|※|■)\s*/g,'$1■ ')
    .replace(/(^|\n)\s*(?:[-+]\s+)(?=\S)/g,'$1■ ');
  return removeFlavorLabel(t.trim());
 }
 function extractFlavor(raw=''){
- const lines=String(raw).replace(/\r/g,'').split('\n');
- const start=lines.findIndex(x=>/^\s*(?:#{1,5}\s*)?フレーバー(?:テキスト)?\s*(?:[：:]\s*.*)?$/.test(x));
+ const lines=String(raw||'').replace(/\r/g,'').split('\n');
+ const heading=/^\s*(?:#{1,6}\s*)?フレーバー(?:テキスト)?\s*(?:[：:]\s*(.*))?$/;
+ const start=lines.findIndex(x=>heading.test(x.trim()));
  if(start<0)return '';
- const out=[];const first=lines[start].replace(/^.*?フレーバー(?:テキスト)?\s*[：:]\s*/,'').trim();
- if(first!==lines[start].trim()&&first)out.push(first);
+ const out=[],inline=lines[start].trim().match(heading)?.[1];
+ if(inline)out.push(inline);
  for(let i=start+1;i<lines.length;i++){
-  const v=lines[i].trim();if(/^(?:#{1,5}\s*)?(?:商品情報|関連カード|収録情報|同名カードが含まれる商品|カードのFAQ|よくある質問|特殊能力|カードテキスト)/.test(v))break;
-  if(/^#{1,5}\s/.test(v)&&out.length)break;
-  if(v&&!/^[-_*]{3,}$/.test(v)&&!/^\*\s*$/.test(v))out.push(v.replace(/^[-*+]\s+/,''));
+  const v=lines[i].trim();
+  if(/^(?:#{1,6}\s*)?(?:商品情報|関連カード|収録情報|同名カードが含まれる商品|カードのFAQ|よくある質問|特殊能力|カードテキスト|フレーバー)/.test(v))break;
+  if(/^#{1,6}\s/.test(v))break;
+  if(!v||/^[-_*]{3,}$/.test(v))continue;
+  if(/^(?:\*|-)\s*(?:DM\d{2}|https?:\/\/)/i.test(v))break;
+  out.push(v.replace(/^[-*+]\s+/,''));
  }
  return cleanText(out.join('\n'));
+}
+function splitOfficialSections(raw=''){
+ const lines=String(raw||'').replace(/\r/g,'').split('\n');
+ const start=lines.findIndex(x=>/^\s*(?:#{1,6}\s*)?特殊能力\s*$/.test(x.trim()));
+ if(start<0)return {rules:'',flavor:extractFlavor(raw)};
+ const parts=[];
+ for(let i=start+1;i<lines.length;i++){
+  const v=lines[i].trim();
+  if(/^(?:#{1,6}\s*)?(?:フレーバー(?:テキスト)?|商品情報|関連カード|収録情報|同名カードが含まれる商品|カードのFAQ|よくある質問)\s*$/.test(v))break;
+  if(/^#{1,6}\s/.test(v)&&parts.length)break;
+  if(!v||/^[-_*]{3,}$/.test(v))continue;
+  parts.push(v.replace(/^[-*+]\s+/,'■ ').replace(/^>\s*/,''));
+ }
+ return {rules:parts.join('\n'),flavor:extractFlavor(raw)};
 }
 function collectorFromOfficial(raw,url){
  const content=String(raw||'').replace(/\r/g,'');
@@ -174,25 +193,12 @@ function extractOfficialMarkdown(md,url){
  let number=(titleLine.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||all.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||[])[1]||'';
  number=collectorFromOfficial(md,url)||number;
 
- let text='';
- const start=lines.findIndex(x=>/特殊能力|カードの能力/.test(x.replace(/^#+\s*/,'')));
- if(start>=0){
-  const block=[];
-  for(let i=start+1;i<lines.length;i++){
-   const x=lines[i].trim();
-   if(/^(?:フレーバー|関連カード|収録情報|よくある質問|商品情報|カードのFAQ|同名カードが含まれる商品)/.test(x.replace(/^#+\s*/,'')))break;
-   if(/^#{1,4}\s/.test(x) && block.length)break;
-   if(!x || /^[-*_]{3,}$/.test(x))continue;
-   let v=x.replace(/^>\s*/,'').replace(/^[-*+]\s*/,'').trim();
-   v=v.replace(/!\[[^\]]*\]\([^)]*\)/g,'').replace(/\[([^\]]*)\]\([^)]*\)/g,'$1');
-   if(v && !/^(特殊能力|カードの能力)$/.test(v))block.push(v);
-  }
-  text=cleanText(block.join('\n'));
- }
+ const sections=splitOfficialSections(md);
+ let text=sections.rules;
  // Official card pages publish the image with a predictable ID-based JPEG path.
  const image=officialCardImage(url);
  const civilization=row('文明'), type=row('カードの種類'), rarity=row('レアリティ'), power=row('パワー'), race=row('種族');
- return {name:title,cost,number,text:normalizeRules(text),flavor:extractFlavor(md),image,url,type,civilization,rarity,power,race};
+ return {name:title,cost,number,text:normalizeRules(text),flavor:sections.flavor,image,url,type,civilization,rarity,power,race};
 }
 function extractWikiOnlyCardText(md){
  const lines=String(md||'').replace(/\r/g,'').split('\n');
