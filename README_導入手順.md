@@ -1,4 +1,4 @@
-RARE CARD HUNTER v2.2.0
+RARE CARD HUNTER v2.3.0
 
 【更新手順】
 1. アプリの「設定」から登録データのバックアップを保存してください。
@@ -6,7 +6,7 @@ RARE CARD HUNTER v2.2.0
 3. rare_card_hunter フォルダ内のファイルを、GitHubリポジトリ直下の同名ファイルへ上書きしてください。
    index.html / app.js / style.css / service-worker.js / manifest.json / icon.svg
 4. GitHubで変更をコミットします。
-5. 公開サイトを開き直し、画面下部が VERSION 2.2.0 になったことを確認してください。
+5. 公開サイトを開き直し、画面下部が VERSION 2.3.0 になったことを確認してください。
 6. 古い画面が残る場合は、サイトを開いた状態でブラウザの再読み込みを行い、必要ならアプリを完全終了して再起動してください。
 
 【カード情報取得について】

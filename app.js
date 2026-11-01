@@ -11,7 +11,18 @@ $('saveSettings').onclick=async()=>{await saveSetting('message',$('settingMessag
 function resetRegister(){$('sourceUrl').value='';$('fetchStatus').textContent='';$('previewPanel').hidden=true;$('editPanel').hidden=true;$('urlEntry').hidden=false;draft=null;editedImage=null;$('previewWanted').checked=false}
 function validUrl(raw){try{const u=new URL(raw);const h=u.hostname.toLowerCase();if(u.protocol!=='https:')return null;if(h==='dm.takaratomy.co.jp'||h.endsWith('.dm.takaratomy.co.jp')||h==='dmwiki.net'||h.endsWith('.dmwiki.net'))return u;return null}catch{return null}}
 function absUrl(src,base){try{return new URL(src,base).href}catch{return ''}}
-function cleanText(s=''){return String(s).replace(/\\\\n/g,'\n').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/[*_`#]/g,'').replace(/\s+/g,' ').trim()}
+function cleanText(s=''){return String(s).replace(/\\\\n/g,'\n').replace(/\r/g,'').replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/<br\s*\/?>/gi,'\n').replace(/[\t ]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').replace(/^[|\s]+|[|\s]+$/gm,'').trim()}
+function extractTextFromDom(doc){
+ const labelRe=/(カードテキスト|テキスト|能力|カードの能力|効果)/;
+ for(const el of [...doc.querySelectorAll('th,dt,strong,b,h2,h3,h4')]){
+  if(!labelRe.test((el.textContent||'').trim()))continue;
+  const candidates=[el.nextElementSibling,el.parentElement?.nextElementSibling,el.parentElement];
+  for(const c of candidates){if(!c)continue;const t=cleanText(c.innerText||c.textContent||'');if(t&&t.length>8&&!labelRe.test(t.slice(0,20)))return t}
+ }
+ const rows=[...doc.querySelectorAll('tr')];
+ for(const tr of rows){const cells=[...tr.querySelectorAll('th,td')];if(cells.length>=2&&labelRe.test(cells[0].textContent||'')){const t=cleanText(cells.slice(1).map(x=>x.innerText||x.textContent).join('\n'));if(t)return t}}
+ return '';
+}
 function pageData(doc,url){
  const meta=(s)=>doc.querySelector(s)?.content||'';
  const title=doc.querySelector('h1')?.textContent?.trim()||meta('meta[property="og:title"]')||doc.title||'';
@@ -20,29 +31,62 @@ function pageData(doc,url){
  let name=find(['カード名','名称'])||title.replace(/\s*[（(].*?[）)]\s*$/,'').replace(/\s*[|｜-].*$/,'').trim();
  let cost=find(['コスト'])||'';cost=(cost.match(/[0-9]+/)||[])[0]||cost;
  let number=find(['コレクター番号','カード番号','収録番号','No.']);
- let text=find(['カードテキスト','テキスト','能力']);
- if(!text)text=meta('meta[property="og:description"]')||meta('meta[name="description"]');
+ let text=find(['カードテキスト','テキスト','能力'])||extractTextFromDom(doc);
+ if(!text){const d=meta('meta[property="og:description"]')||meta('meta[name="description"]');if(d&&!/デュエル・マスターズのカードを集める/.test(d))text=cleanText(d)}
  let image=meta('meta[property="og:image"]')||meta('meta[name="twitter:image"]');
- if(!image){const im=[...doc.images].find(i=>/card|cards|cardimg/i.test((i.getAttribute('src')||'')+' '+(i.getAttribute('alt')||'')));if(im)image=im.getAttribute('src')||im.src}
+ if(!image){const im=[...doc.images].find(i=>/card|cards|cardimg|カード/i.test((i.getAttribute('src')||'')+' '+(i.getAttribute('alt')||'')));if(im)image=im.getAttribute('src')||im.src}
  const extras={type:find(['カードタイプ','種類']),civilization:find(['文明']),rarity:find(['レアリティ']),power:find(['パワー']),race:find(['種族'])};
- return{name,cost,number,text,image:absUrl(image,url),url,...extras};
+ return{name,cost,number,text:cleanText(text),image:absUrl(image,url),url,...extras};
 }
 function markdownData(md,url){
- const lines=String(md||'').replace(/\r/g,'').split('\n').map(x=>x.trim()).filter(Boolean);
+ const raw=String(md||'').replace(/\r/g,'');
+ const lines=raw.split('\n').map(x=>x.trim());
  const joined=lines.join('\n');
- const get=(labels)=>{for(let i=0;i<lines.length;i++){const raw=lines[i];const cells=raw.split('|').map(x=>cleanText(x)).filter(Boolean);if(cells.length>=2&&labels.some(k=>cells[0].replace(/[：: ]/g,'').includes(k)))return cells.slice(1).join(' / ');const line=cleanText(raw);for(const label of labels){const re=new RegExp('^'+label+'\\s*[：:]?\\s*(.*)$');const m=line.match(re);if(m&&m[1])return m[1];if(line===label||line===label+'：')return cleanText(lines[i+1]||'')}}return ''};
- let title=get(['Title'])||''; if(!title){const t=joined.match(/^#\s+(.+)$/m);title=t?.[1]||''}
- const name=get(['カード名','名称','カード']);
- let cost=get(['コスト']);cost=(cost.match(/[0-9]+/)||[])[0]||cost;
- const number=get(['コレクター番号','カード番号','収録番号','カードNo.','No.']);
- let text=get(['カードテキスト','テキスト','能力']);
- if(!text){let i=lines.findIndex(x=>/^(カードテキスト|テキスト|能力)[：:]?$/.test(cleanText(x)));if(i>=0)text=lines.slice(i+1,i+14).map(cleanText).filter(x=>x&&!/^(画像|関連カード|収録情報)/.test(x)).join('\n')}
- if(!text){const desc=get(['Description']);if(desc&&!/デュエル・マスターズのカードを集める/.test(desc))text=desc}
+ const labelNorm=s=>cleanText(s).replace(/^#+\s*/,'').replace(/[|]/g,'').trim();
+ const labels={name:['カード名','名称','カード'],cost:['コスト'],number:['コレクター番号','カード番号','収録番号','カードNo.','No.'],text:['カードテキスト','テキスト','能力','カードの能力','効果']};
+ const get=(keys)=>{
+  for(let i=0;i<lines.length;i++){
+   const line=lines[i].replace(/^\|\s*/,'').replace(/\s*\|$/,'').trim();
+   const cells=line.split('|').map(x=>cleanText(x)).filter(Boolean);
+   if(cells.length>=2&&keys.some(k=>labelNorm(cells[0]).includes(k)))return cleanText(cells.slice(1).join('\n'));
+   const normalized=labelNorm(line);
+   for(const k of keys){
+    if(normalized===k||normalized===k+'：'){
+     const block=[];
+     for(let j=i+1;j<lines.length;j++){
+      const x=lines[j].trim();if(!x) {if(block.length)break;continue;}
+      if(/^#{1,4}\s/.test(x)||/^\|?\s*(カード名|コスト|文明|レアリティ|パワー|種族|収録情報|関連カード|画像|フレーバー|illus\.)\s*[：:|]/i.test(x))break;
+      if(/^[-*_]{3,}$/.test(x))break;
+      block.push(x.replace(/^[-*+]\s*/,''));
+     }
+     if(block.length)return cleanText(block.join('\n'));
+    }
+    const m=normalized.match(new RegExp('^'+k+'\\s*[：:]\\s*(.+)$'));
+    if(m)return cleanText(m[1]);
+   }
+  }
+  return '';
+ };
+ let title=get(['Title']);if(!title){const t=joined.match(/^#\s+(.+)$/m);title=t?.[1]||''}
+ const name=get(labels.name)||title.replace(/^.*?:\s*/,'').replace(/\s*[（(].*?[）)].*$/,'').trim();
+ let cost=get(labels.cost);cost=(cost.match(/[0-9]+/)||[])[0]||cost;
+ const number=get(labels.number);
+ let text=get(labels.text);
+ // Jina Reader may render the official card text as a blockquote or a list without a field label.
+ if(!text){
+  const candidates=[];
+  for(let i=0;i<lines.length;i++){
+   const x=lines[i];
+   if(/^\s*(?:>|[-*+]\s*)/.test(x)&&/(ブロッカー|マッハファイター|Ｔ?[・ ]?ブレイカー|このクリーチャー|召喚コスト|進化|攻撃する時|出た時|自分はゲームに勝つ)/.test(x))candidates.push(x.replace(/^\s*(?:>|[-*+]\s*)+/,'').trim());
+  }
+  if(candidates.length)text=cleanText(candidates.join('\n'));
+ }
+ // Last-resort description is accepted only when it looks like rules text, not the app/site description.
+ if(!text){const d=get(['Description']);if(d&&!/デュエル・マスターズのカードを集める|カード詳細/.test(d))text=d}
  const imgs=[...joined.matchAll(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g)].map(m=>({alt:m[1],url:m[2]}));
  const image=(imgs.find(x=>/card|カード|gorg|ゴルギ/i.test(x.alt+' '+x.url))||imgs.find(x=>!/logo|banner|icon/i.test(x.alt+' '+x.url))||{}).url||'';
  const collector=number||((title+' '+joined.slice(0,1500)).match(/(?:DM\d{2}[A-Z0-9-]*\s*)?(?:[0-9]{1,3}\/[0-9]{1,3}|S[0-9]+\/S[0-9]+)/i)||[])[0]||'';
- const finalName=name||title.replace(/^.*?:\s*/,'').replace(/\s*[（(].*?[）)].*$/,'').trim();
- return {name:finalName,cost,number:collector,text,image,url};
+ return {name,cost,number:collector,text:cleanText(text),image,url};
 }
 async function fetchReader(url){
  const endpoint='https://r.jina.ai/'+url;
