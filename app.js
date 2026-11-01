@@ -17,6 +17,7 @@ function cleanCardRules(raw=''){
  let s=String(raw||'').replace(/\r/g,'').replace(/\\n/g,'\n');
  s=s.split(/(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*\s*)?(?:商品情報|同名カードが含まれる商品|関連カード|収録情報|カードのFAQ|よくある質問|FAQ|カード検索|トップページ)(?:\s|$)/m)[0];
  s=s.replace(/(?:^|\n)\s*\*\s*(?:&count=|https?:\/\/)/m,'');
+ s=removeFlavorLabel(s);
  s=s.split('\n').map(x=>x.trim()).filter(x=>x&&!/^[-_]{3,}$/.test(x)&&!/^\*\s*(?:&count=|商品情報)/.test(x)).map(x=>x.replace(/^(?:\*|※)\s*(?=[^\s])/,'■ ').replace(/^(?:[-+]\s+)(?=.{2})/,'■ ')).join('\n');
  return cleanText(s);
 }
@@ -26,7 +27,7 @@ function normalizeRules(raw=''){
  t=t.replace(/\s+(?:\*|※|■)\s*(?=[^\s])/g,'\n■ ')
    .replace(/(^|\n)\s*(?:\*|※|■)\s*/g,'$1■ ')
    .replace(/(^|\n)\s*(?:[-+]\s+)(?=\S)/g,'$1■ ');
- return t.trim();
+ return removeFlavorLabel(t.trim());
 }
 function extractFlavor(raw=''){
  const lines=String(raw).replace(/\r/g,'').split('\n');
@@ -37,23 +38,29 @@ function extractFlavor(raw=''){
  for(let i=start+1;i<lines.length;i++){
   const v=lines[i].trim();if(/^(?:#{1,5}\s*)?(?:商品情報|関連カード|収録情報|同名カードが含まれる商品|カードのFAQ|よくある質問|特殊能力|カードテキスト)/.test(v))break;
   if(/^#{1,5}\s/.test(v)&&out.length)break;
-  if(v&&!/^[-_*]{3,}$/.test(v))out.push(v.replace(/^[-*+]\s+/,''));
+  if(v&&!/^[-_*]{3,}$/.test(v)&&!/^\*\s*$/.test(v))out.push(v.replace(/^[-*+]\s+/,''));
  }
  return cleanText(out.join('\n'));
 }
 function collectorFromOfficial(raw,url){
- const lines=String(raw||'').split('\n');
- const heading=lines.filter(x=>/^\s*(?:#{1,4}\s*)?[^\n]{2,160}[（(][^\n]{1,100}[）)]/.test(x)).join('\n');
- const scope=heading+'\n'+lines.slice(0,170).join('\n');
+ const content=String(raw||'').replace(/\r/g,'');
  const id=new URL(url).searchParams.get('id')||'';
- const set=(id.match(/^dm(\d{2}(?:rp|ex|bd|sd)\d+)/i)||[])[1]?.toUpperCase()||'';
- // Some collector numbers contain Japanese prefixes, e.g. 超45/超50.
- const re=/(?:DM)?(\d{2}(?:RP|EX|BD|SD)\d+)\s+(?:[A-Z]{1,3}\s+)?((?:超|秘|S|SP|P)?\d+\s*\/\s*(?:超|秘|S|SP|P)?\d+)/i;
- const m=scope.match(re);
- if(m)return m[1].toUpperCase()+'  '+m[2].replace(/\s/g,'').toUpperCase();
- const number=scope.match(/((?:超|秘|S|SP|P)?\d+\s*\/\s*(?:超|秘|S|SP|P)?\d+)/i);
- if(number&&set)return set+'  '+number[1].replace(/\s/g,'').toUpperCase();
+ const set=(id.match(/^dm(\d{2}[a-z]+\d+)/i)||[])[1]?.toUpperCase()||'';
+ // The official card title contains the printed collector number in parentheses.
+ // Restrict the search to the title/breadcrumb to avoid matching unrelated products.
+ const titles=content.split('\n').filter(line=>/^\s*(?:#{1,4}\s+|\d+\.\s+|<title>)/.test(line)&&/[（(][^）)]+[）)]/.test(line));
+ const normalize=number=>number.replace(/\s*\/\s*/g,'/').replace(/^DM/i,'').replace(/\s+/g,' ').trim();
+ const pattern=/(?:DM)?(\d{2}[A-Z]+\d+)\s+((?:(?:超|秘|S|SP|P)?\d+|[A-Z]+\d+)\s*\/\s*(?:(?:超|秘|S|SP|P)?\d+|[A-Z]+\d+))/i;
+ for(const line of titles){const m=line.match(pattern);if(m)return m[1].toUpperCase()+'  '+normalize(m[2]);}
+ // The card URL itself gives the set but not the printed serial number.
+ // Prefer numbers near the card name, never invent a serial number.
+ const first=content.split('\n').slice(0,185).join('\n');
+ const m=first.match(pattern);if(m)return m[1].toUpperCase()+'  '+normalize(m[2]);
+ if(set){const m2=titles.join('\n').match(/((?:超|秘|S|SP|P)?\d+\s*\/\s*(?:超|秘|S|SP|P)?\d+)/i);if(m2)return set+'  '+normalize(m2[1]);}
  return '';
+}
+function removeFlavorLabel(raw=''){
+ return String(raw||'').split('\n').filter(x=>!/^\s*(?:#{1,5}\s*)?フレーバー(?:テキスト)?\s*$/.test(x.trim())).join('\n').replace(/(?:\n|^)\s*フレーバー\s*$/,'').trim();
 }
 function extractTextFromDom(doc){
  const labelRe=/(カードテキスト|テキスト|能力|カードの能力|効果)/;
@@ -158,7 +165,7 @@ function extractOfficialMarkdown(md,url){
  let cost=row('コスト').match(/[0-9]+/)?.[0]||'';
  let number=(titleLine.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||all.match(/((?:DM[A-Z0-9-]+\s+)?\d{1,3}\/\d{1,3}|S\d+\/S\d+)/i)||[])[1]||'';
  number=collectorFromOfficial(md,url)||number;
- const idPart=new URL(url).searchParams.get('id')||'';const setMatch=idPart.match(/^dm(\d{2}[a-z0-9]+)-s\d+$/i);if(setMatch&&number)number=setMatch[1].toUpperCase()+'  '+number.toUpperCase();
+
  let text='';
  const start=lines.findIndex(x=>/特殊能力|カードの能力/.test(x.replace(/^#+\s*/,'')));
  if(start>=0){
