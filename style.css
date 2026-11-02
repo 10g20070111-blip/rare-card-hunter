@@ -34,3 +34,11 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 
 .name-number{font-size:.55em;color:var(--muted);font-weight:600;display:inline;white-space:normal;vertical-align:baseline}
 .text-block:has(#previewFlavor){margin-top:14px}
+
+/* v2.17: wider speech bubble and visible search navigation */
+.character-area .bubble{width:min(290px,64vw);max-width:none;min-width:190px;bottom:84px;padding:12px 16px;line-height:1.5}
+.search-pagination{display:flex;align-items:center;justify-content:center;gap:14px;padding:16px 2px 5px}
+.search-pagination button{min-width:75px}.search-pagination button:disabled{opacity:.35}
+.search-pagination span{font-weight:800;color:var(--gold)}
+#previewPanel{scroll-margin-top:12px}
+@media(max-width:420px){.character-area .bubble{width:min(245px,62vw);max-width:none;bottom:78px}}

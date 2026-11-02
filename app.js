@@ -33,24 +33,26 @@ function normalizeRules(raw=''){
 // Official reader data is split by its labelled sections, not guessed from ability words.
 function officialSections(raw=''){
  const lines=String(raw||'').replace(/\r/g,'').split('\n');
- const header=v=>String(v).trim().replace(/^#{1,6}\s*/,'').replace(/^\*\*|\*\*$/g,'').replace(/[：:]\s*$/,'').trim();
- const isRules=v=>/^(特殊能力|カードテキスト|能力テキスト|テキスト)$/.test(header(v));
- const isFlavor=v=>/^(フレーバー|フレーバーテキスト)$/.test(header(v));
- const stop=v=>/^(商品情報|同名カードが含まれる商品|関連カード|収録情報|このカードのよくある質問|よくある質問|カードのFAQ|カード検索|カード詳細|イラストレーター)$/.test(header(v));
- let state='',rules=[],flavor=[];
- for(const original of lines){
-  let line=original.trim();
-  if(isRules(line)){state='rules';continue;}
-  if(isFlavor(line)){state='flavor';continue;}
-  if(stop(line)&&state){state='';break;}
-  if(!state)continue;
-  if(!line||/^[-_*─]{3,}$/.test(line)||/^#{1,6}\s*$/.test(line))continue;
+ const strip=x=>String(x).trim().replace(/^#{1,6}\s*/,'').replace(/^\*\*\s*|\s*\*\*$/g,'').replace(/[：:]\s*$/,'').trim();
+ const isRule=x=>/^(特殊能力|カードテキスト|能力テキスト|テキスト)$/.test(strip(x));
+ const isFlavor=x=>/^(フレーバー|フレーバーテキスト)$/.test(strip(x));
+ const isStop=x=>/^(商品情報|同名カードが含まれる商品(?:を表示)?|関連カード|収録情報|このカードのよくある質問|よくある質問|カードのFAQ|カード検索|カード詳細|イラストレーター)$/.test(strip(x));
+ const begin=lines.findIndex(x=>isRule(x));
+ if(begin<0)return {rules:'',flavor:''};
+ let state='rules',rules=[],flavor=[];
+ for(let i=begin+1;i<lines.length;i++){
+  let line=lines[i].trim();
+  if(isFlavor(line)){state='flavor';continue}
+  if(isStop(line))break;
+  if(isRule(line))continue;
+  if(!line||/^[-_*─]{3,}$/.test(line))continue;
   if(/^#{1,6}\s/.test(line))break;
-  if(/^(?:\*\s*)?(?:DM\d{2}[- ]|商品情報|このカードのよくある質問)/i.test(line)&&state==='flavor')break;
-  if(/^https?:\/\//.test(line))break;
+  if(/^(?:\*\s*)?(?:DM\d{2}[- ]|https?:\/\/)/i.test(line)&&state==='flavor')break;
   line=line.replace(/^\s*[-*+]\s+(?=\S)/,'■ ').replace(/^\s*※\s*/,'■ ').replace(/^\s*>\s*/,'');
   if(state==='rules')rules.push(line);else flavor.push(line);
  }
+ // A non-bulleted closing sentence is often flavor, but do not guess when no
+ // explicit flavor label exists: incorrect attribution is worse than a blank.
  return {rules:rules.join('\n'),flavor:cleanText(flavor.join('\n'))};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
@@ -183,8 +185,13 @@ function extractOfficialMarkdown(md,url){
   for(let i=0;i<cells.length-1;i++)if(cells[i]===label)return cells[i+1];
   const match=all.match(new RegExp('(?:^|\\n)\\s*'+label+'\\s*[：:]\\s*([^\\n]+)'));return match?.[1]?.trim()||'';
  };
- const sections=officialSections(md);
- const number=collectorFromOfficial(md,url);
+ let sections=officialSections(md);
+ if(!sections.rules){
+  const m=String(md).match(/(?:^|\n)[^\n]{0,24}特殊能力[^\n]*\n([\s\S]*?)(?=\n[^\n]{0,12}フレーバー|\n[^\n]{0,12}商品情報|\n[^\n]{0,30}同名カードが含まれる商品|$)/);
+  if(m){const rules=m[1].split('\n').filter(x=>x.trim()&&!/^[-_*─]{3,}$/.test(x.trim())).join('\n');sections={...sections,rules};}
+ }
+
+ const number=collectorFromOfficial(md,url)||((heading.match(/\((DM[^)]+)\)/i)||[])[1]||'').replace(/^DM/i,'').replace(/\s+/, '  ');
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
  text:normalizeRules(sections.rules),flavor:sections.flavor,
  image:officialCardImage(url),url,type:get('カードの種類'),civilization:get('文明'),
@@ -220,11 +227,11 @@ $('fetchPage').onclick=async()=>{
   const body=await fetchReader(url.href);lastOfficialReader=body;$('readerDiagnostics').hidden=false;
   let parsed;
   const isOfficial=url.hostname==='dm.takaratomy.co.jp';
-  if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||'',flavor:specific.flavor||''};}}
-  else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||'',flavor:specific.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
+  if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||parsed.flavor||''};}}
+  else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||parsed.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
   if(isOfficial){const exactImage=officialCardImage(url.href);if(exactImage)parsed.image=exactImage;}
   if(!parsed.name&&!parsed.text&&!parsed.image&&!parsed.cost&&!parsed.number)throw Error('ページからカード情報を抽出できませんでした');
-  draft={...parsed,text:normalizeRules(parsed.text),flavor:parsed.flavor||extractFlavor(body),url:url.href};renderPreview();
+  draft={...parsed,text:normalizeRules(parsed.text),flavor:parsed.flavor||extractFlavor(body),url:url.href};renderPreview();requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
   const missing=[];if(!draft.name)missing.push('カード名');if(!draft.cost)missing.push('コスト');if(!draft.number)missing.push('コレクター番号');if(!draft.text)missing.push('テキスト');if(!draft.image)missing.push('画像');
   $('fetchStatus').textContent=missing.length?'一部の情報を取得できませんでした（'+missing.join('・')+'）。「編集する」から補完できます。':'カード情報を取得しました。内容を確認してください。';
  }catch(e){$('fetchStatus').textContent='自動取得に失敗しました。通信制限、外部読み取りサービスの応答、またはページ形式が原因の可能性があります。時間をおいて再試行するか、「編集する」から入力してください。';}
@@ -289,11 +296,11 @@ function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;select
 }
 $('toggleWanted').onclick=async()=>{const c=cards.find(x=>x.id===selectedCardId);if(!c)return;c.wanted=!c.wanted;await saveCard(c);openCardDetail(c.id);$('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(x=>x.wanted).length;};
 function escapeHtml(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function searchOfficialCards(q){
+async function searchOfficialCards(q,page=1){
  // Search the official site's result page, then read each official detail page.
  // The search page may be converted to Markdown with broken image/link syntax,
  // so use it only to collect detail URLs; obtain title/collector number from each detail page.
- const payload={keyword:q,keyword_type:['card_name'],pagenum:'1',samename:'show',sort:'release_new'};
+ const payload={keyword:q,keyword_type:['card_name'],pagenum:String(page),samename:'show',sort:'release_new'};
  const target='https://dm.takaratomy.co.jp/card/?v='+encodeURIComponent(JSON.stringify(payload));
  const md=await fetchReader(target);
  const urls=[];const urlRe=/https?:\/\/dm\.takaratomy\.co\.jp\/card\/detail\/?\?id=[a-z0-9-]+/gi;let m;
@@ -301,7 +308,7 @@ async function searchOfficialCards(q){
  // Relative URLs are also emitted by some official-site result layouts.
  const relRe=/\/card\/detail\/?\?id=[a-z0-9-]+/gi;
  while((m=relRe.exec(md))&&urls.length<20){const u='https://dm.takaratomy.co.jp'+m[0];if(!urls.includes(u))urls.push(u)}
- const results=await Promise.all(urls.slice(0,8).map(async url=>{
+ const results=await Promise.all(urls.slice(0,12).map(async url=>{
   try{
    const pos=md.indexOf(url);
    const vicinity=pos>=0?md.slice(Math.max(0,pos-350),Math.min(md.length,pos+450)):'';
@@ -321,18 +328,28 @@ async function searchOfficialCards(q){
  }));
  return results.filter(Boolean);
 }
-$('officialSearchButton').onclick=async()=>{
- const q=$('officialSearchInput').value.trim();$('officialSearchResults').innerHTML='';
- if(q.length<4){$('officialSearchStatus').textContent='カード名を4文字以上入力してください。';return;}
- $('officialSearchButton').disabled=true;$('officialSearchStatus').textContent='公式カードデータベースを検索しています…';
+let officialSearchPage=1,officialSearchTerm='';
+async function runOfficialSearch(q,page=1){
+ $('officialSearchButton').disabled=true;
+ $('officialSearchStatus').textContent=`公式カードを検索中…（${page}ページ）`;
  try{
-  const results=await searchOfficialCards(q);
-  $('officialSearchStatus').textContent=results.length?`${results.length}件の候補が見つかりました。`:'公式検索結果から候補を取得できませんでした。下のURL欄に公式カードページのURLを貼り付けてください。';
-  $('officialSearchResults').innerHTML=results.length?'<details class="search-collapse" open><summary>検索結果を表示・折りたたむ（'+results.length+'件）</summary>'+results.map((r,i)=>`<div class="official-result"><div class="official-result-main">${r.image?`<img class="official-result-thumb" src="${escapeAttr(r.image)}" alt="" loading="lazy">`:''}<div class="official-result-title"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.number||'コレクター番号不明')}</small></div></div><small class="official-result-url">${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('')+'</details>':'';
+  const results=await searchOfficialCards(q,page);
+  officialSearchPage=page;officialSearchTerm=q;
+  $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補`:'このページには候補がありません。';
+  const html=results.map((r,i)=>`<div class="official-result"><div class="official-result-main">${r.image?`<img class="official-result-thumb" src="${escapeAttr(r.image)}" alt="" loading="lazy">`:''}<div class="official-result-title"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.number||'コレクター番号不明')}</small></div></div><small class="official-result-url">${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('');
+  $('officialSearchResults').innerHTML=`<details class="search-collapse" open><summary>検索結果を表示・折りたたむ（${page}ページ・${results.length}件）</summary>${html}<nav class="search-pagination"><button class="action secondary" id="searchPrevious" ${page<=1?'disabled':''}>前</button><span>${page} ページ</span><button class="action primary" id="searchNext" ${results.length===0?'disabled':''}>次</button></nav></details>`;
+  $('searchPrevious').onclick=()=>runOfficialSearch(q,page-1);
+  $('searchNext').onclick=()=>runOfficialSearch(q,page+1);
   document.querySelectorAll('[data-copy-search]').forEach(b=>b.onclick=async()=>{const r=results[+b.dataset.copySearch];try{await navigator.clipboard.writeText(r.url);b.textContent='コピーしました';}catch{$('sourceUrl').value=r.url;b.textContent='URL欄に入力しました';}});
-  document.querySelectorAll('[data-register-search]').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.registerSearch];$('sourceUrl').value=r.url;$('fetchPage').click();$('urlEntry').scrollIntoView({behavior:'smooth',block:'start'});});
- }catch(e){$('officialSearchStatus').textContent='公式検索との通信に失敗しました。時間をおいて再試行するか、下のURL欄をご利用ください。';}
+  document.querySelectorAll('[data-register-search]').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.registerSearch];$('sourceUrl').value=r.url;$('fetchPage').click();});
+  if(page>1)$('officialSearchResults').scrollIntoView({behavior:'smooth',block:'start'});
+ }catch(e){$('officialSearchStatus').textContent='検索に失敗しました。通信状態を確認して再試行してください。'}
  finally{$('officialSearchButton').disabled=false;}
+}
+$('officialSearchButton').onclick=()=>{
+ const q=$('officialSearchInput').value.trim();
+ if(q.length<4){$('officialSearchStatus').textContent='カード名を4文字以上入力してください。';return;}
+ runOfficialSearch(q,1);
 };
 $('officialSearchInput').addEventListener('keydown',e=>{if(e.key==='Enter')$('officialSearchButton').click()});
 $('exportData').onclick=async()=>{const payload={app:'RARE CARD HUNTER',version:2,cards,settings};const blob=new Blob([JSON.stringify(payload)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='rare-card-hunter-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
