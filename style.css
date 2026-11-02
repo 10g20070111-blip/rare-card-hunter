@@ -63,3 +63,10 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 
 /* v2.19 search-focused release: prevent bubble clipping on mobile */
 .character-area .bubble{box-sizing:border-box;max-width:min(245px,calc(100vw - 190px));white-space:normal;overflow-wrap:break-word}
+
+/* Official product cards: 223:435 image aspect ratio */
+.pack-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:12px;margin-top:12px}
+.pack-item{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px;background:#181526;border:1px solid #514766;border-radius:14px;color:#f5e6c2;text-decoration:none;font-size:.84rem;line-height:1.5;overflow-wrap:anywhere}
+.pack-item img,.pack-image-placeholder{display:block;width:min(100%,223px);aspect-ratio:223/435;object-fit:contain;border-radius:5px}
+.pack-image-placeholder{display:grid;place-items:center;text-align:center;background:#29233a;color:#bdb2ce;padding:8px}
+.pack-item span{text-align:center}
