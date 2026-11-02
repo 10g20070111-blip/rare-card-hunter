@@ -1,0 +1,6 @@
+RARE CARD HUNTER v2.31.15
+1. 既存コレクションをバックアップ
+2. WorkerのJS/TXT全文をCloudflareに貼り付けてDeploy
+3. ZIP内のサイトファイルをGitHub Pagesへ配置
+4. Ctrl+Shift+Rで再読み込み
+※公式に商品情報が存在しないカードは自動補完できません。
