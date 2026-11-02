@@ -93,15 +93,23 @@ function officialProductLinks(raw=''){
  const start=lines.findIndex(x=>/^\s*(?:#{1,5}\s*)?(?:商品情報|同名カードが含まれる商品|収録商品)\s*$/.test(x));
  if(start<0)return [];
  const products=[],seen=new Set();
- for(const line of lines.slice(start+1)){
-  if(/^(?:#{1,5}\s*)?(?:よくある質問|関連カード|カードのFAQ|Twitter|Facebook|©)/.test(line.trim()))break;
-  for(const m of line.matchAll(/\[([^\]]+)\]\((https:\/\/dm\.takaratomy\.co\.jp\/product\/[^)\s]+)\)/gi)){
-   const url=m[2].split('#')[0];if(seen.has(url))continue;
-   const name=cleanText(m[1]);if(!name||name==='商品情報')continue;
-   seen.add(url);products.push({name,url,image:''});
-  }
+ const push=(name,url='')=>{
+  name=cleanText(name).replace(/^[-*•]\s*/,'').trim();
+  const code=normalizeProductCode(name);
+  if(!name||!code)return;
+  const key=code+'|'+name.replace(/\s+/g,'');
+  if(seen.has(key))return;seen.add(key);products.push({name,url,image:''});
+ };
+ for(const line of lines.slice(start+1, start+90)){
+  const t=line.trim();
+  if(/^(?:#{1,5}\s*)?(?:よくある質問|関連カード|カードのFAQ|Twitter|Facebook|©|お問い合わせ)/.test(t))break;
+  const links=[...line.matchAll(/\[([^\]]+)\]\((https:\/\/dm\.takaratomy\.co\.jp\/product\/[^)\s]+)\)/gi)];
+  for(const m of links)push(m[1],m[2].split('#')[0]);
+  // Plain-text product names are valid even when no product page exists.
+  const plain=t.replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/^[-*•]\s*/,'');
+  if(/^(?:DM(?:\d{1,2}|\d{2}[- ]?(?:RP|EX|SD|BD|SP)\d+|(?:EX|RP|BD|SD|ART|X)\s*[- ]?\d+)|DMART\s*[- ]?\d+|プロモ(?:限定)?カード)/i.test(plain))push(plain,links[0]?.[2]||'');
  }
- return products.slice(0,40);
+ return products.slice(0,60);
 }
 // Resolve a product's main image through the official Worker; keep reader as fallback.
 const productImageCache=new Map();
@@ -110,9 +118,9 @@ async function productImageFromOfficial(product){
  if(productImageCache.has(key))return productImageCache.get(key);
  const task=(async()=>{
   try{
-   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23119');
+   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23120');
    const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
-   if(response.ok){const data=await response.json();if(data.image)return data.image;}
+   if(response.ok){const data=await response.json();if(data.image&&data.selection!=='metadata'&&data.verifiedPackage)return data.image;}
   }catch{}
   return '';
  })();productImageCache.set(key,task);return task;
@@ -266,7 +274,7 @@ function legacyOfficialProducts(text,cardUrl){
   seen.add(code);
   const name=(match[1]+' '+match[2]).replace(/\s*\[[^\]]+\]\([^)]*\)\s*/g,'').trim();
   // The official card page is a verifiable fallback when old products have no linked product page.
-  products.push({name,url:cardUrl,image:'',legacyFallback:true});
+  products.push({name,url:'',image:'',legacyFallback:true});
  }
  return products;
 }
@@ -405,7 +413,9 @@ function officialHtmlDetails(html,url){
   if(!name||name==='商品情報'||!/^DM(?:[- ]?\d{1,2}|[A-Z]{1,4}[- ]?\d{1,3})/i.test(name)||seen.has(href.href))continue;
   seen.add(href.href);products.push({name,url:href.href,image:''});
  }
- return {flavor:flavor.length<=1200?flavor:'',products:products.length?products.slice(0,30):legacyOfficialProducts(doc.body?.textContent||'',url)};
+ const fallback=legacyOfficialProducts(doc.body?.textContent||'',url);
+ const merged=new Map();for(const p of [...products,...fallback]){const k=normalizeProductCode(p.name)||p.name;if(!merged.has(k)||(!merged.get(k).url&&p.url))merged.set(k,p);}
+ return {flavor:flavor.length<=1200?flavor:'',products:[...merged.values()].slice(0,60)};
 }
 $('fetchPage').onclick=async()=>{
  const url=validUrl($('sourceUrl').value.trim());
@@ -425,7 +435,7 @@ $('fetchPage').onclick=async()=>{
   const isOfficial=url.hostname==='dm.takaratomy.co.jp';
   if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}}
   else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
-  if(isOfficial&&officialExtra){if(officialExtra.flavor)parsed.flavor=officialExtra.flavor;if(officialExtra.products.length)parsed.products=officialExtra.products;}
+  if(isOfficial&&officialExtra){if(officialExtra.flavor)parsed.flavor=officialExtra.flavor;if(officialExtra.products.length){const all=[...(parsed.products||[]),...officialExtra.products];const merged=new Map();for(const x of all){const k=normalizeProductCode(x.name)||x.name;if(!merged.has(k)||(!merged.get(k).url&&x.url))merged.set(k,x);}parsed.products=[...merged.values()];}}
   if(isOfficial){
    // Some official titles carry a set/serial identifier not recognized by the older parser.
    const titleNumber=(String(body).match(/(?:^|\n)\s*(?:Title:|#{1,4}\s*)?[^\n]{1,120}?[（(]\s*(DM[A-Z0-9-]+\s+[^)（）]{1,35})\s*[)）]/i)||[])[1]||'';
@@ -502,7 +512,7 @@ function renderProductInfo(target,products,collectorNumber='',cardUrl=''){
  for(const p of data){const cat=productCategory(p);groups[cat].push(tile(p,cat,versionMatchesProduct(collectorNumber,p)));}
  if(!hasExact&&code){
   const cat=/DMART/.test(code)?'art':'pack';
-  groups[cat].unshift(tile({name:`${code}（番号から判定・正式商品名未確認）`,url:source,legacyFallback:true},cat,true));
+  groups[cat].unshift(tile({name:`${code}（コレクター番号と一致・商品名未確認）`,url:'',legacyFallback:true},cat,true));
  }
  if(promo&&!data.some(p=>productCategory(p)==='promo')){
   groups.promo.unshift(tile({name:`プロモーション版（${collectorNumber||'番号不明'}）・配布元未確認`,url:source},'promo',true));

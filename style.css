@@ -101,3 +101,7 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 @media(max-width:440px){.pack-grid,.product-category .pack-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}}
 /* Category sections span the full outer grid, so their inner grids stay horizontal. */
 .pack-grid > .product-category{grid-column:1/-1;min-width:0;width:100%;}
+
+/* v2.31.20 */
+.product-category .pack-grid{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:12px!important}
+@media(max-width:680px){.product-category .pack-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
