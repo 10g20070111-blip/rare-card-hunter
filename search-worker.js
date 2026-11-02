@@ -1,4 +1,4 @@
-// RARE CARD HUNTER — Cloudflare Worker v2.31.7
+// RARE CARD HUNTER — Cloudflare Worker v2.31.9
 // Live official search with bounded requests and useful diagnostics.
 const ORIGIN = 'https://dm.takaratomy.co.jp';
 const HEADERS = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
@@ -51,6 +51,18 @@ export default {async fetch(request){
  if(request.method==='OPTIONS')return new Response(null,{headers:HEADERS});
  if(request.method!=='GET')return reply({error:'GET only'},405);
  const u=new URL(request.url);
+ const imageUrl=u.searchParams.get('image');
+ if(imageUrl!==null){
+  let target;try{target=new URL(imageUrl)}catch{return reply({error:'Invalid image URL'},400)}
+  // Only fetch images hosted on the official domain; prevent open proxy use.
+  if(target.protocol!=='https:'||!(target.hostname==='dm.takaratomy.co.jp'||target.hostname.endsWith('.dm.takaratomy.co.jp'))||! /\.(?:png|jpe?g|webp)$/i.test(target.pathname))return reply({error:'Image URL not allowed'},400);
+  try{
+   const response=await fetch(target.href,{headers:{Accept:'image/avif,image/webp,image/png,image/jpeg,image/*','Referer':ORIGIN+'/','User-Agent':'Mozilla/5.0'},redirect:'follow'});
+   const type=(response.headers.get('content-type')||'').split(';')[0].toLowerCase();
+   if(!response.ok||!['image/jpeg','image/png','image/webp','image/avif'].includes(type))return reply({error:'Official image unavailable',status:response.status,type},502);
+   return new Response(response.body,{status:200,headers:{'Content-Type':type,'Cache-Control':'public, max-age=86400','Access-Control-Allow-Origin':'*','X-Content-Type-Options':'nosniff'}});
+  }catch(e){return reply({error:'Image proxy failed: '+String(e.message||e)},502)}
+ }
  const productUrl=u.searchParams.get('product');
  if(productUrl!==null){
   let target;
@@ -60,13 +72,25 @@ export default {async fetch(request){
    const d=await fetchHtml(target.href);
    if(d.status!==200)return reply({error:'Official product HTTP '+d.status},502);
    const html=d.html;
+   // Extract images from metadata, lazy-load attributes, srcset, and CSS background URLs.
    const metas=[...html.matchAll(/<meta\b[^>]*>/gi)].map(m=>m[0]);
-   const metaImage=metas.filter(tag=>/og:image|twitter:image/i.test(attr(tag,'property')+' '+attr(tag,'name'))).map(tag=>attr(tag,'content'));
+   const metaImage=metas.filter(tag=>/^(?:og:image(?::secure_url)?|twitter:image)$/i.test(attr(tag,'property')||attr(tag,'name'))).map(tag=>attr(tag,'content'));
    const imgTags=[...html.matchAll(/<img\b[^>]*>/gi)].map(m=>m[0]);
-   const candidates=[...metaImage,...imgTags.flatMap(tag=>[attr(tag,'data-src'),attr(tag,'src'),attr(tag,'data-original')])];
-   const urls=candidates.map(src=>{try{return new URL(src,d.url).href}catch{return ''}}).filter(src=>src.startsWith('https://')&&!/logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|cardimage|noimage/i.test(src));
-   const image=urls.find(src=>/product|item|package|main|thumb|pack/i.test(src))||urls[0]||'';
-   return reply({image,source:'official-product',url:d.url});
+   const imageCandidates=[...metaImage];
+   for(const tag of imgTags){
+    for(const key of ['data-src','data-original','data-lazy-src','data-image','src'])imageCandidates.push(attr(tag,key));
+    for(const key of ['data-srcset','srcset']){
+     const set=attr(tag,key);for(const part of set.split(','))imageCandidates.push(part.trim().split(/\s+/)[0]);
+    }
+   }
+   for(const m of html.matchAll(/(?:background-image\s*:\s*url\(|data-bg\s*=\s*['"])(?:['"]?)([^'"\)\s]+\.(?:png|jpe?g|webp)(?:\?[^'"\)\s]*)?)/gi))imageCandidates.push(m[1]);
+   const urls=[...new Set(imageCandidates.map(src=>{try{return new URL(decode(src),d.url).href}catch{return ''}}).filter(src=>/^https:\/\//i.test(src)&&/\.(?:png|jpe?g|webp)(?:[?#]|$)/i.test(src)&&!/logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|cardimage|noimage|loading|spinner|placeholder/i.test(src)))];
+   const score=src=> (/product|package|pack|item|main|thumb|kv|visual|image/i.test(src)?10:0)+(/\/uploads\/|\/product\//i.test(src)?3:0)-(/sprite|background|common/i.test(src)?12:0);
+   urls.sort((a,b)=>score(b)-score(a));
+   const originalImage=urls[0]||'';
+   // Use same-origin Worker image proxy to avoid cross-site image hotlink restrictions.
+   const image=originalImage?new URL('/?image='+encodeURIComponent(originalImage),request.url).href:'';
+   return reply({image,originalImage,source:'official-product',url:d.url,candidates:urls.length});
   }catch(e){return reply({error:'Product image lookup failed: '+String(e.message||e)},502)}
  }
  const detailId=u.searchParams.get('detail');

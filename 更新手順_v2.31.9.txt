@@ -1,0 +1,1 @@
+RARE CARD HUNTER v2.31.9\n1. 現在のコレクションをアプリのバックアップ機能で保存。\n2. Cloudflare Worker に search-worker.js を貼り付けて Deploy。\n3. GitHub Pages の index.html, service-worker.js を更新（他のファイルは前バージョンと同じ）。\n4. Chrome で再読み込みして商品画像を確認。\n画像が表示されない場合、Worker の ?product=URL の JSON の image/originalImage/candidates を確認してください。\nブラウザのサイトデータを削除しないでください。\n
