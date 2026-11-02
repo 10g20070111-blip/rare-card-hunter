@@ -42,17 +42,17 @@ function officialSections(raw=''){
  let state='rules',rules=[],flavor=[];
  for(let i=begin+1;i<lines.length;i++){
   let line=lines[i].trim();
-  if(isFlavor(line)){state='flavor';continue}
+  if(isFlavor(line)){state='flavor';continue;}
   if(isStop(line)||/^(?:\*\s*){1,4}(?:商品情報|このカードのよくある質問|同名カードが含まれる商品)/.test(line))break;
+  // Product listing begins immediately after the flavor, often without a label.
+  if(state==='flavor'&&/^(?:[-*+]\s*)?(?:DM\d{2}(?:[- ]|[A-Z])|DMR[P-]|DMBD|DMEX|DMART|プロモ限定カード)/i.test(line))break;
   if(isRule(line))continue;
   if(!line||/^[-_*─]{3,}$/.test(line))continue;
   if(/^#{1,6}\s/.test(line))break;
-  if(/^(?:\*\s*)?(?:DM\d{2}[- ]|https?:\/\/)/i.test(line)&&state==='flavor')break;
+  if(/^https?:\/\//i.test(line))break;
   line=line.replace(/^\s*[-*+]\s+(?=\S)/,'■ ').replace(/^\s*※\s*/,'■ ').replace(/^\s*>\s*/,'');
   if(state==='rules')rules.push(line);else flavor.push(line);
  }
- // A non-bulleted closing sentence is often flavor, but do not guess when no
- // explicit flavor label exists: incorrect attribution is worse than a blank.
  return {rules:rules.join('\n'),flavor:cleanText(flavor.join('\n'))};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
@@ -191,6 +191,10 @@ function extractOfficialMarkdown(md,url){
   if(m){const rules=m[1].split('\n').filter(x=>x.trim()&&!/^[-_*─]{3,}$/.test(x.trim())).join('\n');sections={...sections,rules};}
  }
 
+ if(!sections.flavor){
+  const m=String(md).match(/(?:^|\n)\s*(?:#{1,6}\s*)?フレーバー(?:テキスト)?\s*\n(?:\s*[-─_]{3,}\s*\n)?([^\n]+)/);
+  if(m&&m[1]&&!/^(?:\*|[-+])\s*DM/i.test(m[1].trim()))sections.flavor=cleanText(m[1]);
+ }
  const number=collectorFromOfficial(md,url)||((heading.match(/\((DM[^)]+)\)/i)||[])[1]||'').replace(/^DM/i,'').replace(/\s+/, '  ');
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
  text:normalizeRules(sections.rules),flavor:sections.flavor,
@@ -338,13 +342,13 @@ async function searchOfficialCards(q,page=1){
  const bing='https://www.bing.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&first='+((page-1)*20+1);
  const bundled=VERIFIED_CARDS.filter(x=>normalizeCardSearch(x.name).includes(normalizeCardSearch(q)));
  // For known cards, return verified official entries without relying on blocked search services.
- if(bundled.length)return bundled.slice((page-1)*12,page*12);
+ // Bundled known cards supplement live discovery, rather than replacing all search results.
  const sources=await Promise.allSettled([fetchReader(google),fetchReader(bing),fetchReader(official)]);
  const candidates=new Set();
  for(const result of sources)if(result.status==='fulfilled')for(const url of officialDetailLinks(result.value))candidates.add(url);
  // Never show arbitrary recent cards when a search engine or official search
  // returns an unrelated listing. Check the actual card detail page title.
- const all=[...candidates];const matches=[];
+ const all=[...candidates];const matches=page===1?[...bundled]:[];const seen=new Set(matches.map(x=>x.url));
  for(let i=0;i<all.length;i+=6){
   const batch=await Promise.all(all.slice(i,i+6).map(async url=>{
    try{
@@ -355,8 +359,8 @@ async function searchOfficialCards(q,page=1){
     return {name,number:card.number||collectorFromOfficial(detail,url)||'',url,image:officialCardImage(url)};
    }catch{return null;}
   }));
-  matches.push(...batch.filter(Boolean));
-  if(matches.length>=12)break;
+  for(const item of batch.filter(Boolean)){if(!seen.has(item.url)){seen.add(item.url);matches.push(item);}}
+  if(matches.length>=24)break;
  }
  return matches.slice(0,12);
 }
@@ -405,7 +409,7 @@ async function runOfficialSearch(q,page=1){
   const results=await searchOfficialCards(q,page);
   if(requestId!==officialSearchRequest)return;
   officialSearchPage=page;officialSearchTerm=q;
-  $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補`:'一致するカードを取得できませんでした。外部検索サービスが利用できない可能性があります。公式URLが分かる場合は下のURL欄から登録できます。';
+  $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補（検索できた範囲）`:'一致するカードを取得できませんでした。外部検索サービスが利用できない可能性があります。公式URLが分かる場合は下のURL欄から登録できます。';
   const html=results.map((r,i)=>`<div class="official-result"><div class="official-result-main">${r.image?`<img class="official-result-thumb" src="${escapeAttr(r.image)}" alt="" loading="lazy">`:''}<div class="official-result-title"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.number||'コレクター番号不明')}</small></div></div><small class="official-result-url">${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('');
   $('officialSearchResults').innerHTML=`<details class="search-collapse" open><summary>検索結果を表示・折りたたむ（${page}ページ・${results.length}件）</summary>${html}<nav class="search-pagination"><button class="action secondary" id="searchPrevious" ${page<=1?'disabled':''}>前</button><span>${page} ページ</span><button class="action primary" id="searchNext" ${results.length<12?'disabled':''}>次</button></nav></details>`;
   $('searchPrevious').onclick=()=>runOfficialSearch(q,page-1);
