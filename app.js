@@ -296,41 +296,47 @@ function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;select
 }
 $('toggleWanted').onclick=async()=>{const c=cards.find(x=>x.id===selectedCardId);if(!c)return;c.wanted=!c.wanted;await saveCard(c);openCardDetail(c.id);$('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(x=>x.wanted).length;};
 function escapeHtml(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+// The official search URL is not reliably respected by the text gateway.
+// Collect candidate IDs from multiple independent search pages and verify
+// each candidate against the requested card name before displaying it.
+const normalizeCardSearch=x=>String(x||'').normalize('NFKC').toLocaleLowerCase('ja-JP').replace(/[\s　・･「」『』（）()【】!！?？]/g,'');
+function officialDetailLinks(md){
+ const found=new Set();
+ const patterns=[
+  /https?:\/\/(?:dm\.takaratomy\.co\.jp)\/card\/detail\/?\?id=([a-z0-9-]+)/gi,
+  /\/card\/detail\/?\?id=([a-z0-9-]+)/gi,
+  /dm\.takaratomy\.co\.jp\/card\/detail\/?\?id=([a-z0-9-]+)/gi
+ ];
+ for(const re of patterns){let m;while((m=re.exec(md))&&found.size<80)found.add('https://dm.takaratomy.co.jp/card/detail/?id='+m[1]);}
+ return [...found];
+}
 async function searchOfficialCards(q,page=1){
- // Search the official site's result page, then read each official detail page.
- // The search page may be converted to Markdown with broken image/link syntax,
- // so use it only to collect detail URLs; obtain title/collector number from each detail page.
  const payload={keyword:q,keyword_type:['card_name'],pagenum:String(page),samename:'show',sort:'release_new'};
- const target='https://dm.takaratomy.co.jp/card/?v='+encodeURIComponent(JSON.stringify(payload));
- const md=await fetchReader(target);
- const urls=[];const urlRe=/https?:\/\/dm\.takaratomy\.co\.jp\/card\/detail\/?\?id=[a-z0-9-]+/gi;let m;
- while((m=urlRe.exec(md))&&urls.length<20){try{const u=new URL(m[0]);if(!urls.includes(u.href))urls.push(u.href)}catch{}}
- // Relative URLs are also emitted by some official-site result layouts.
- const relRe=/\/card\/detail\/?\?id=[a-z0-9-]+/gi;
- while((m=relRe.exec(md))&&urls.length<20){const u='https://dm.takaratomy.co.jp'+m[0];if(!urls.includes(u))urls.push(u)}
- const results=await Promise.all(urls.slice(0,12).map(async url=>{
-  try{
-   const pos=md.indexOf(url);
-   const vicinity=pos>=0?md.slice(Math.max(0,pos-350),Math.min(md.length,pos+450)):'';
-   const label=(vicinity.match(/\[([^\]\n]{3,90})\]\(https?:\/\/dm\.takaratomy\.co\.jp\/card\/detail/i)||[])[1]||'';
-   const nearbyNumber=(vicinity.match(/DM\d{2}(?:EX|RP|BD|SD)\d+\s+(?:超|秘|S)?\d+\/(?:超|秘|S)?\d+/i)||[])[0]||'';
-   if(label&&!/[!\[\]()*]/.test(label)&&nearbyNumber){return {name:label,number:nearbyNumber.replace(/^DM/i,'').replace(/\s+/, '  '),url,image:officialCardImage(url)};}
-   const detail=await fetchReader(url);
-   const card=extractOfficialMarkdown(detail,url);
-   const id=new URL(url).searchParams.get('id')||'';
-   const thumb=(detail.match(/https?:\/\/dm\.takaratomy\.co\.jp\/wp-content\/card\/cardthumb\/[a-z0-9-]+\.(?:jpg|png|webp)/i)||[])[0]
-    ||card.image||officialCardImage(url);
-   const number=card.number||collectorFromOfficial(vicinity,url)||'';
-   const name=(card.name||'').trim();
-   if(!name||/^(カード検索|商品情報|画像|詳細)$/.test(name))return null;
-   return {name,number,url,image:thumb};
-  }catch{return null}
- }));
- // Some reader gateways ignore the encoded ?v= search filter and return
- // the latest cards. Never present unrelated cards as search matches.
- const normalize=x=>String(x||'').normalize('NFKC').toLocaleLowerCase('ja-JP').replace(/[\\s　・･「」『』（）()【】!！?？]/g,'');
- const query=normalize(q);
- return results.filter(r=>r&&normalize(r.name).includes(query));
+ const official='https://dm.takaratomy.co.jp/card/?v='+encodeURIComponent(JSON.stringify(payload));
+ // Alternative indexed search: the gateway can serve a cached default card
+ // listing regardless of ?v=. Search-engine result pages have distinct URLs.
+ const google='https://www.google.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&num=30&start='+((page-1)*30);
+ const bing='https://www.bing.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&first='+((page-1)*20+1);
+ const sources=await Promise.allSettled([fetchReader(google),fetchReader(bing),fetchReader(official)]);
+ const candidates=new Set();
+ for(const result of sources)if(result.status==='fulfilled')for(const url of officialDetailLinks(result.value))candidates.add(url);
+ // Never show arbitrary recent cards when a search engine or official search
+ // returns an unrelated listing. Check the actual card detail page title.
+ const all=[...candidates];const matches=[];
+ for(let i=0;i<all.length;i+=6){
+  const batch=await Promise.all(all.slice(i,i+6).map(async url=>{
+   try{
+    const detail=await fetchReader(url);
+    const card=extractOfficialMarkdown(detail,url);
+    const name=(card.name||'').trim();
+    if(!name||!normalizeCardSearch(name).includes(normalizeCardSearch(q)))return null;
+    return {name,number:card.number||collectorFromOfficial(detail,url)||'',url,image:officialCardImage(url)};
+   }catch{return null;}
+  }));
+  matches.push(...batch.filter(Boolean));
+  if(matches.length>=12)break;
+ }
+ return matches.slice(0,12);
 }
 let officialSearchPage=1,officialSearchTerm='',officialSearchRequest=0;
 async function runOfficialSearch(q,page=1){
@@ -341,7 +347,7 @@ async function runOfficialSearch(q,page=1){
   const results=await searchOfficialCards(q,page);
   if(requestId!==officialSearchRequest)return;
   officialSearchPage=page;officialSearchTerm=q;
-  $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補`:'一致するカードが見つかりません。公式検索の応答が検索語を無視している可能性があります。';
+  $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補`:'一致するカードを取得できませんでした。検索サービスの応答が利用できない場合があります。カードの公式URLが分かる場合は下のURL欄から登録できます。';
   const html=results.map((r,i)=>`<div class="official-result"><div class="official-result-main">${r.image?`<img class="official-result-thumb" src="${escapeAttr(r.image)}" alt="" loading="lazy">`:''}<div class="official-result-title"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.number||'コレクター番号不明')}</small></div></div><small class="official-result-url">${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('');
   $('officialSearchResults').innerHTML=`<details class="search-collapse" open><summary>検索結果を表示・折りたたむ（${page}ページ・${results.length}件）</summary>${html}<nav class="search-pagination"><button class="action secondary" id="searchPrevious" ${page<=1?'disabled':''}>前</button><span>${page} ページ</span><button class="action primary" id="searchNext" ${results.length===0?'disabled':''}>次</button></nav></details>`;
   $('searchPrevious').onclick=()=>runOfficialSearch(q,page-1);

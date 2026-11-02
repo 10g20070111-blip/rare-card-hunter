@@ -60,3 +60,6 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
  .character-area{right:10px;bottom:8px}
  .character-area .bubble{width:max-content;max-width:calc(100vw - 185px);min-width:0;bottom:38%;padding:9px 12px}
 }
+
+/* v2.19 search-focused release: prevent bubble clipping on mobile */
+.character-area .bubble{box-sizing:border-box;max-width:min(245px,calc(100vw - 190px));white-space:normal;overflow-wrap:break-word}
