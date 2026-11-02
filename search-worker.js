@@ -1,4 +1,4 @@
-// RARE CARD HUNTER — Cloudflare Worker v2.31.9
+// RARE CARD HUNTER — Cloudflare Worker v2.31.10
 // Live official search with bounded requests and useful diagnostics.
 const ORIGIN = 'https://dm.takaratomy.co.jp';
 const HEADERS = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
@@ -47,6 +47,30 @@ async function enrich(card){
   return {...card,name:info.name||card.name,number:info.number||card.number,image:card.image||(src?new URL(src,ORIGIN).href:''),_status:d.status,_title:plain((d.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]||'')};
  }catch(e){return {...card,_error:String(e.message||e)}}
 }
+// Inspect actual image dimensions, so a portrait pack photo wins over a landscape banner.
+// The first 64 KiB is enough for ordinary JPEG/PNG/WebP headers.
+function imageSize(bytes,type){
+ const b=new Uint8Array(bytes), dv=new DataView(bytes);
+ if(b.length<24)return null;
+ if(b[0]===137&&b[1]===80&&b[2]===78&&b[3]===71)return {w:dv.getUint32(16),h:dv.getUint32(20)};
+ if(b[0]===255&&b[1]===216){let i=2;while(i+9<b.length){if(b[i]!==255){i++;continue;}const marker=b[i+1];if(marker===255){i++;continue;}if(marker===216||marker===217){i+=2;continue;}const len=(b[i+2]<<8)|b[i+3];if(len<2||i+2+len>b.length)break;if([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker))return {h:(b[i+5]<<8)|b[i+6],w:(b[i+7]<<8)|b[i+8]};i+=2+len;}}
+ if(b.length>=30&&String.fromCharCode(...b.slice(0,4))==='RIFF'&&String.fromCharCode(...b.slice(8,12))==='WEBP'){
+  const fmt=String.fromCharCode(...b.slice(12,16));
+  if(fmt==='VP8X')return {w:1+b[24]+(b[25]<<8)+(b[26]<<16),h:1+b[27]+(b[28]<<8)+(b[29]<<16)};
+  if(fmt==='VP8 '&&b.length>=30)return {w:((b[27]<<8)|b[26])&0x3fff,h:((b[29]<<8)|b[28])&0x3fff};
+  if(fmt==='VP8L'&&b.length>=25)return {w:1+(((b[22]&0x3f)<<8)|b[21]),h:1+(((b[24]&15)<<10)|(b[23]<<2)|((b[22]&0xc0)>>6))};
+ }
+ return null;
+}
+async function probeImage(src){
+ try{
+  const r=await fetch(src,{headers:{Accept:'image/*',Range:'bytes=0-65535',Referer:ORIGIN+'/'},redirect:'follow',signal:AbortSignal.timeout(5500)});
+  if(!r.ok||!/^image\//i.test(r.headers.get('content-type')||''))return null;
+  // Some servers ignore Range; don't download giant images just to inspect dimensions.
+  if(Number(r.headers.get('content-length')||0)>150000&&r.status!==206){await r.body?.cancel();return null;}
+  const data=await r.arrayBuffer();return imageSize(data,r.headers.get('content-type')||'');
+ }catch{return null}
+}
 export default {async fetch(request){
  if(request.method==='OPTIONS')return new Response(null,{headers:HEADERS});
  if(request.method!=='GET')return reply({error:'GET only'},405);
@@ -76,21 +100,63 @@ export default {async fetch(request){
    const metas=[...html.matchAll(/<meta\b[^>]*>/gi)].map(m=>m[0]);
    const metaImage=metas.filter(tag=>/^(?:og:image(?::secure_url)?|twitter:image)$/i.test(attr(tag,'property')||attr(tag,'name'))).map(tag=>attr(tag,'content'));
    const imgTags=[...html.matchAll(/<img\b[^>]*>/gi)].map(m=>m[0]);
-   const imageCandidates=[...metaImage];
-   for(const tag of imgTags){
-    for(const key of ['data-src','data-original','data-lazy-src','data-image','src'])imageCandidates.push(attr(tag,key));
+   const imageCandidates=[];
+   // Keep HTML position and alt text: official product photography is usually
+   // inside the product content, whereas the first og:image can be a banner.
+   for(const m of html.matchAll(/<img\b[^>]*>/gi)){
+    const tag=m[0], alt=attr(tag,'alt'), cls=attr(tag,'class');
+    for(const key of ['data-src','data-original','data-lazy-src','data-image','src']){
+     const src=attr(tag,key);if(src)imageCandidates.push({src,alt,cls,pos:m.index||0,tag});
+    }
     for(const key of ['data-srcset','srcset']){
-     const set=attr(tag,key);for(const part of set.split(','))imageCandidates.push(part.trim().split(/\s+/)[0]);
+     for(const part of attr(tag,key).split(',')){
+      const src=part.trim().split(/\s+/)[0];if(src)imageCandidates.push({src,alt,cls,pos:m.index||0,tag});
+     }
     }
    }
-   for(const m of html.matchAll(/(?:background-image\s*:\s*url\(|data-bg\s*=\s*['"])(?:['"]?)([^'"\)\s]+\.(?:png|jpe?g|webp)(?:\?[^'"\)\s]*)?)/gi))imageCandidates.push(m[1]);
-   const urls=[...new Set(imageCandidates.map(src=>{try{return new URL(decode(src),d.url).href}catch{return ''}}).filter(src=>/^https:\/\//i.test(src)&&/\.(?:png|jpe?g|webp)(?:[?#]|$)/i.test(src)&&!/logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|cardimage|noimage|loading|spinner|placeholder/i.test(src)))];
-   const score=src=> (/product|package|pack|item|main|thumb|kv|visual|image/i.test(src)?10:0)+(/\/uploads\/|\/product\//i.test(src)?3:0)-(/sprite|background|common/i.test(src)?12:0);
-   urls.sort((a,b)=>score(b)-score(a));
-   const originalImage=urls[0]||'';
-   // Use same-origin Worker image proxy to avoid cross-site image hotlink restrictions.
+   for(const src of metaImage)if(src)imageCandidates.push({src,alt:'',cls:'metadata',pos:-1,tag:''});
+   for(const m of html.matchAll(/(?:background-image\s*:\s*url\(|data-bg\s*=\s*['"])(?:['"]?)([^'"\)\s]+\.(?:png|jpe?g|webp)(?:\?[^'"\)\s]*)?)/gi))imageCandidates.push({src:m[1],alt:'',cls:'background',pos:m.index||0,tag:''});
+   const byUrl=new Map();
+   for(const item of imageCandidates){
+    let url;try{url=new URL(decode(item.src),d.url)}catch{continue}
+    if(url.protocol!=='https:'||!(url.hostname==='dm.takaratomy.co.jp'||url.hostname.endsWith('.dm.takaratomy.co.jp'))||!/\.(?:png|jpe?g|webp)$/i.test(url.pathname))continue;
+    if(/logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|cardimage|noimage|loading|spinner|placeholder|sprite/i.test(url.pathname))continue;
+    if(!byUrl.has(url.href))byUrl.set(url.href,{...item,url:url.href});
+   }
+   const title=plain((html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)||[])[1]||'');
+   const slug=target.pathname.split('/').filter(Boolean).pop()||'';
+   const items=[...byUrl.values()];
+   function initialScore(item){
+    const u=item.url,context=(item.alt+' '+item.cls+' '+item.tag).toLowerCase();
+    const width=Number(attr(item.tag,'width')),height=Number(attr(item.tag,'height'));
+    let score=0;
+    if(/pack|package|パック|パッケージ|商品画像|商品写真|商品メイン/i.test(context+' '+u))score+=12;
+    if(/product|main|item|thumb/i.test(context+' '+u))score+=6;
+    if(slug&&u.toLowerCase().includes(slug.toLowerCase()))score+=5;
+    if(/og:image|metadata/i.test(item.cls))score-=5;
+    if(/kv|visual|campaign|hero|wide|slide|carousel|background/i.test(context+' '+u))score-=12;
+    if(width&&height){if(height>width*1.25)score+=35;else if(width>height*1.4)score-=20;}
+    if(item.pos>=0)score+=Math.max(0,5-item.pos/25000);
+    return score;
+   }
+   items.sort((a,b)=>initialScore(b)-initialScore(a));
+   // Test dimensions instead of assuming that the first image is the pack.
+   // Limit probes to keep Worker response times and upstream traffic bounded.
+   const checks=await Promise.all(items.slice(0,12).map(async item=>({item,size:await probeImage(item.url)})));
+   const ranked=checks.map(({item,size})=>{
+    let score=initialScore(item);
+    if(size&&size.w&&size.h){
+     const ratio=size.h/size.w;
+     if(ratio>=1.35)score+=100; // vertical booster wrapper / deck box
+     else if(ratio>=1.05)score+=30;
+     else if(ratio<0.85)score-=65; // landscape promotional banners
+     if(size.w<130||size.h<130)score-=40;
+    }
+    return {item,size,score};
+   }).sort((a,b)=>b.score-a.score);
+   const originalImage=ranked[0]?.item.url||items[0]?.url||'';
    const image=originalImage?new URL('/?image='+encodeURIComponent(originalImage),request.url).href:'';
-   return reply({image,originalImage,source:'official-product',url:d.url,candidates:urls.length});
+   return reply({image,originalImage,source:'official-product',url:d.url,candidates:items.length,selectedDimensions:ranked[0]?.size||null,selection:"portrait-pack-preferred"});
   }catch(e){return reply({error:'Product image lookup failed: '+String(e.message||e)},502)}
  }
  const detailId=u.searchParams.get('detail');

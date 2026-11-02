@@ -1,0 +1,9 @@
+RARE CARD HUNTER v2.31.10
+
+1. 既存コレクションをアプリからバックアップしてください。
+2. Cloudflare Worker のコードを search-worker.js の全文に置き換えて Deploy。
+3. GitHub Pages に index.html / app.js / style.css / service-worker.js / manifest.json / icon.svg を更新。
+4. Chromeで再読み込みし、パック商品画像を確認してください。
+
+変更: 公式商品ページ内の画像の実寸を調べ、縦長のパッケージ写真を横長バナーより優先。
+注意: 商品ページによっては縦長写真がなく、横長画像が表示されることがあります。
