@@ -33,27 +33,30 @@ function normalizeRules(raw=''){
 // Official reader data is split by its labelled sections, not guessed from ability words.
 function officialSections(raw=''){
  const lines=String(raw||'').replace(/\r/g,'').split('\n');
- const normalized=x=>String(x||'').trim().replace(/^#{1,6}\s*/,'')
-   .replace(/^\*{1,2}\s*|\s*\*{1,2}$/g,'').replace(/^[| ]+|[| ]+$/g,'').replace(/[:：]$/,'').trim();
- const isRule=x=>/^(?:特殊能力|カードテキスト|能力テキスト)$/.test(normalized(x));
- const isFlavor=x=>/^(?:フレーバー|フレーバーテキスト)$/.test(normalized(x));
- const isStop=x=>/^(?:商品情報|このカードのよくある質問|よくある質問|同名カードが含まれる商品(?:を表示)?|収録情報|関連カード)$/.test(normalized(x))
- ||/^(?:\s*[-*+]\s*){1,5}(?:商品情報|このカードのよくある質問|同名カード)/.test(x)
- ||/^\s*(?:[-*+]\s*)?DM(?:\d{2}[- ]|RP|BD|EX|ART)/i.test(x)
- ||/^\s*#{1,6}\s+(?!フレーバー|特殊能力)/.test(x);
- const parse=(start,kind)=>{
-  if(start<0)return '';
-  const out=[];
-  for(let i=start+1;i<lines.length;i++){
+ const normalize=x=>String(x||'').trim().replace(/^#{1,6}\s*/,'')
+  .replace(/^\*{1,2}\s*|\s*\*{1,2}$/g,'').replace(/[:：]\s*$/,'').trim();
+ const isRules=x=>/^(特殊能力|カードテキスト|能力テキスト)$/.test(normalize(x));
+ const isFlavor=x=>/^(フレーバー|フレーバーテキスト)$/.test(normalize(x));
+ // Jina Markdown formats the footer as "*     * 商品情報".
+ // Stop at the first bullet containing a footer label, not only a plain heading.
+ const isFooter=x=>/(?:商品情報|このカードのよくある質問|よくある質問|同名カードが含まれる商品|収録情報|関連カード|Twitter|Facebook|LINEで送る|シェア)/.test(x)
+  ||/^\s*(?:[-*+]\s*)?DM(?:\d{2}[- ]|RP|BD|EX|ART)/i.test(x)
+  ||/^\s*#{1,6}\s+(?!フレーバー|特殊能力)/.test(x)
+  ||/^\s*(?:\*+\s*){2,}$/.test(x);
+ const read=(index,kind)=>{
+  if(index<0)return '';
+  const result=[];
+  for(let i=index+1;i<lines.length;i++){
    const line=lines[i].trim();
-   if(isStop(line)||isFlavor(line)||isRule(line))break;
+   if(isFooter(line)||isFlavor(line)||isRules(line))break;
    if(!line||/^[-_*─]{3,}$/.test(line))continue;
-   if(/^https?:\/\//.test(line))break;
-   out.push(kind==='rules'?line.replace(/^\s*[-*+]\s+(?=\S)/,'■ '):line.replace(/^\s*>\s*/,''));
+   if(/^https?:\/\//.test(line)||/^\[!?Image\b/.test(line))break;
+   result.push(kind==='rules'?line.replace(/^\s*[-*+]\s+(?=\S)/,'■ '):line);
+   if(kind==='flavor'&&result.join('').length>1200)break;
   }
-  return cleanText(out.join('\n'));
+  return cleanText(result.join('\n'));
  };
- return {rules:parse(lines.findIndex(isRule),'rules'),flavor:parse(lines.findIndex(isFlavor),'flavor')};
+ return {rules:read(lines.findIndex(isRules),'rules'),flavor:read(lines.findIndex(isFlavor),'flavor')};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
 function splitOfficialSections(raw=''){return officialSections(raw);}
@@ -204,10 +207,6 @@ function extractOfficialMarkdown(md,url){
   if(m){const rules=m[1].split('\n').filter(x=>x.trim()&&!/^[-_*─]{3,}$/.test(x.trim())).join('\n');sections={...sections,rules};}
  }
 
- if(!sections.flavor){
-  const m=String(md).match(/(?:^|\n)\s*(?:#{1,6}\s*)?フレーバー(?:テキスト)?\s*\n(?:\s*[-─_]{3,}\s*\n)?([^\n]+)/);
-  if(m&&m[1]&&!/^(?:\*|[-+])\s*(?:DM|商品情報|このカードのよくある質問|同名カード)/i.test(m[1].trim()))sections.flavor=cleanText(m[1]);
- }
  const number=collectorFromOfficial(md,url)||((heading.match(/\((DM[^)]+)\)/i)||[])[1]||'').replace(/^DM/i,'').replace(/\s+/, '  ');
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
  text:normalizeRules(sections.rules),flavor:sections.flavor||'',
@@ -244,8 +243,8 @@ $('fetchPage').onclick=async()=>{
   const body=await fetchReader(url.href);lastOfficialReader=body;$('readerDiagnostics').hidden=false;
   let parsed;
   const isOfficial=url.hostname==='dm.takaratomy.co.jp';
-  if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||parsed.flavor||''};}}
-  else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||parsed.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
+  if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}}
+  else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
   if(isOfficial){const exactImage=officialCardImage(url.href);if(exactImage)parsed.image=exactImage;}
   if(!parsed.name&&!parsed.text&&!parsed.image&&!parsed.cost&&!parsed.number)throw Error('ページからカード情報を抽出できませんでした');
   draft={...parsed,text:normalizeRules(parsed.text),flavor:parsed.flavor||extractFlavor(body),url:url.href};renderPreview();requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
@@ -369,10 +368,11 @@ async function searchOfficialCards(q,page=1,onPartial=()=>{}){
  // The official listing can contain valid card links even if third-party web search ignores the query.
  // Avoid requiring every detail request to succeed just to retain the candidate list.
  const seen=new Set(found.keys());
- const feeds=[official,google,bing].map(async endpoint=>{
+ const yahoo='https://search.yahoo.co.jp/search?p='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ '+q);
+ const feeds=[official,google,bing,yahoo].map(async endpoint=>{
   try{
    const body=await fetchReader(endpoint);
-   const urls=officialDetailLinks(body).filter(url=>!seen.has(url)).slice(0,65);
+   const urls=officialDetailLinks(body).filter(url=>!seen.has(url));
    for(const url of urls)seen.add(url);
    for(let i=0;i<urls.length;i+=10){
     const batch=await Promise.all(urls.slice(i,i+10).map(async url=>{
