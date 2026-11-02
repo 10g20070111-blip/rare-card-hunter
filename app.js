@@ -33,8 +33,8 @@ function normalizeRules(raw=''){
  for(const line of lines){
   if(/^■/.test(line)){out.push(line.replace(/^■\s*/,'■ '));continue;}
   if(ability.test(line)){out.push('■ '+line);continue;}
-  // A new independent printed effect normally starts with one of these phrases.
-  if(/^(?:このクリーチャー|この呪文|このカード|自分の|相手の|各プレイヤー|バトルゾーンに|ターンの|攻撃する時|出た時|破壊された時|召喚した時|唱えた時|手札から|山札の|墓地から|マナゾーンから|自分が|相手が|自分または相手|次のうち)/.test(line) && out.length && !/^\s*[▶→↳]/.test(line))out.push('■ '+line);
+  // Do not invent bullets on continuation lines: only an explicit bullet or
+  // an independently recognised keyword indicates a new printed ability.
   else out.push(line);
  }
  return removeFlavorLabel(out.join('\n').trim());
@@ -106,7 +106,7 @@ async function productImageFromOfficial(product){
  if(productImageCache.has(key))return productImageCache.get(key);
  const task=(async()=>{
   try{
-   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23115');
+   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23116');
    const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
    if(response.ok){const data=await response.json();if(data.image)return data.image;}
   }catch{}
@@ -117,7 +117,7 @@ async function enrichProducts(card){
  const products=Array.isArray(card.products)?card.products:[];
  if(!products.length)return card;
  const unique=[...new Map(products.filter(p=>p?.url).map(p=>[p.url.split('#')[0],p])).values()].slice(0,12);
- return {...card,products:await Promise.all(unique.map(async p=>({...p,image:p.image||await productImageFromOfficial(p)})))};
+ return {...card,products:await Promise.all(unique.map(async p=>({...p,image:(p.legacyFallback||isPromotion(card.number,p))?'':(p.image||await productImageFromOfficial(p))})))};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
 function splitOfficialSections(raw=''){return officialSections(raw);}
@@ -161,7 +161,7 @@ function pageData(doc,url){
  const meta=(s)=>doc.querySelector(s)?.content||'';
  const title=doc.querySelector('h1')?.textContent?.trim()||meta('meta[property="og:title"]')||doc.title||'';
  const rows=[...doc.querySelectorAll('tr')].map(tr=>[...tr.querySelectorAll('th,td')].map(x=>x.textContent.trim()).filter(Boolean)).filter(x=>x.length>1);
- const find=keys=>{const row=rows.find(r=>keys.some(k=>r[0].replace(/[：: ]/g,'').includes(k)));return row?.slice(1).join(' / ')||''};
+ const find=keys=>{for(const r of rows){for(let i=0;i<r.length-1;i++){if(keys.some(k=>r[i].replace(/[：: ]/g,'')===k))return r[i+1];}}return '';};
  let name=find(['カード名','名称'])||title.replace(/\s*[（(].*?[）)]\s*$/,'').replace(/\s*[|｜-].*$/,'').trim();
  let cost=find(['コスト'])||'';cost=(cost.match(/[0-9]+/)||[])[0]||cost;
  let number=find(['コレクター番号','カード番号','収録番号','No.']);
@@ -169,7 +169,7 @@ function pageData(doc,url){
  if(!text){const d=meta('meta[property="og:description"]')||meta('meta[name="description"]');if(d&&!/デュエル・マスターズのカードを集める/.test(d))text=cleanText(d)}
  let image=meta('meta[property="og:image"]')||meta('meta[name="twitter:image"]');
  if(!image){const im=[...doc.images].find(i=>/card|cards|cardimg|カード/i.test((i.getAttribute('src')||'')+' '+(i.getAttribute('alt')||'')));if(im)image=im.getAttribute('src')||im.src}
- const extras={type:find(['カードタイプ','種類']),civilization:find(['文明']),rarity:find(['レアリティ']),power:find(['パワー']),race:find(['種族'])};
+ const extras={type:find(['カードタイプ','種類']),civilization:find(['文明']),rarity:find(['レアリティ']),power:(()=>{const v=find(['パワー']);return /^(?:[0-9０-９]{3,6}[+＋]?|\*|∞|0)$/.test(v)?v:''})(),race:find(['種族'])};
  return{name,cost,number,text:cleanCardRules(text),image:absUrl(image,url),url,...extras};
 }
 function markdownData(md,url){
@@ -249,6 +249,23 @@ function officialCardImage(url){
   return `https://dm.takaratomy.co.jp/wp-content/card/cardimage/${encodeURIComponent(id)}.jpg`;
  }catch{return ''}
 }
+function legacyOfficialProducts(text,cardUrl){
+ const source=String(text||'');
+ const pos=source.lastIndexOf('同名カードが含まれる商品を表示');
+ if(pos<0)return [];
+ const block=source.slice(pos+('同名カードが含まれる商品を表示').length, pos+2000);
+ const products=[],seen=new Set();
+ for(const line of block.split(/\n/).slice(0,35)){
+  const match=line.match(/(?:^|\s|\*)\s*(DM\s*[- ]?\s*(?:\d{1,2}|(?:EX|X|D|BD|RP|SD)\s*[- ]?\d{1,3}))\s+([^\n]{3,140})/i);
+  if(!match)continue;
+  const code=normalizeProductCode(match[1]);if(!code||seen.has(code))continue;
+  seen.add(code);
+  const name=(match[1]+' '+match[2]).replace(/\s*\[[^\]]+\]\([^)]*\)\s*/g,'').trim();
+  // The official card page is a verifiable fallback when old products have no linked product page.
+  products.push({name,url:cardUrl,image:'',legacyFallback:true});
+ }
+ return products;
+}
 function extractOfficialMarkdown(md,url){
  const lines=String(md||'').replace(/\r/g,'').split('\n');
  const heading=lines.find(x=>/^#{1,4}\s+/.test(x)&&/\((?:DM[A-Z0-9-]+\s+)?[^()]*\d+\/[^()]*\d+\)/i.test(x))
@@ -268,11 +285,13 @@ function extractOfficialMarkdown(md,url){
   if(m){const rules=m[1].split('\n').filter(x=>x.trim()&&!/^[-_*─]{3,}$/.test(x.trim())).join('\n');sections={...sections,rules};}
  }
 
+ const officialPowerRaw=get('パワー');
+ const officialPower=/^(?:[0-9０-９]{3,6}(?:\+|＋)?|\*|∞|0)$/.test(officialPowerRaw.trim())?officialPowerRaw.trim():'';
  const number=collectorFromOfficial(md,url)||((heading.match(/[（(]\s*(DM[^)）]+)[)）]/i)||[])[1]||'').trim();
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
- text:normalizeRules(sections.rules),flavor:sections.flavor||'',products:officialProductLinks(md),
+ text:normalizeRules(sections.rules),flavor:sections.flavor||'',products:(()=>{const links=officialProductLinks(md);return links.length?links:legacyOfficialProducts(md,url)})(),
  image:officialCardImage(url),url,type:get('カードの種類'),civilization:get('文明'),
- rarity:get('レアリティ'),power:get('パワー'),race:get('種族')};
+ rarity:get('レアリティ'),power:officialPower,race:get('種族')};
 }
 function extractWikiOnlyCardText(md){
  const lines=String(md||'').replace(/\r/g,'').split('\n');
@@ -308,7 +327,7 @@ async function fetchOfficialDetailHtml(url){
   return result.html;
  }finally{clearTimeout(timer)}
 }
-// v2.31.14: Read flavor from the actual labelled card fields, including both
+// v2.31.16: Read flavor from the actual labelled card fields, including both
 // faces of a twinpact. Never infer flavor from ordinary ability paragraphs.
 function officialFlavorFromHtml(doc){
  const labels=/^フレーバー(?:[・\s　]*テキスト)?\s*[：:]?\s*$/;
@@ -379,10 +398,10 @@ function officialHtmlDetails(html,url){
   const href=new URL(a.getAttribute('href'),url);
   if(href.hostname!=='dm.takaratomy.co.jp'||!/^\/product\//.test(href.pathname))continue;
   const name=(a.textContent||'').replace(/\s+/g,' ').trim();
-  if(!name||name==='商品情報'||!/^DM(?:\d{2}|RP|BD|EX|ART)/i.test(name)||seen.has(href.href))continue;
+  if(!name||name==='商品情報'||!/^DM(?:[- ]?\d{1,2}|[A-Z]{1,4}[- ]?\d{1,3})/i.test(name)||seen.has(href.href))continue;
   seen.add(href.href);products.push({name,url:href.href,image:''});
  }
- return {flavor:flavor.length<=1200?flavor:'',products:products.slice(0,30)};
+ return {flavor:flavor.length<=1200?flavor:'',products:products.length?products.slice(0,30):legacyOfficialProducts(doc.body?.textContent||'',url)};
 }
 $('fetchPage').onclick=async()=>{
  const url=validUrl($('sourceUrl').value.trim());
@@ -430,18 +449,32 @@ function displayNameWithoutNumber(name='',number=''){
 }
 function normalizeProductCode(value=''){
  const v=String(value||'').normalize('NFKC').toUpperCase().replace(/[‐‑‒–—−ー－]/g,'-');
- const m=v.match(/(?:DM\s*[- ]?\s*)?(?:\d{2}\s*[- ]?\s*(?:RP|EX|SD|BD|SP|ART|P|R)\s*[- ]?\s*\d{1,4}|(?:RP|EX|SD|BD|SP|ART)\s*[- ]?\s*\d{1,4})/);
- return m?'DM'+m[0].replace(/[^A-Z0-9]/g,'').replace(/^DM/,''):'';
+ // Modern: DM26-RP3, DM26SD1, DM24-EX1, DMEX-19.
+ let m=v.match(/DM\s*[- ]?\s*(\d{2})\s*[- ]?\s*(RP|EX|SD|BD|SP|ART|P|R)\s*[- ]?\s*(\d{1,4})/);
+ if(m)return 'DM'+m[1]+m[2]+String(Number(m[3]));
+ m=v.match(/DM\s*[- ]?\s*(RP|EX|SD|BD|SP|ART|X|D|P)\s*[- ]?\s*(\d{1,4})/);
+ if(m)return 'DM'+m[1]+String(Number(m[2]));
+ // Original DM-01 to DM-39 and later legacy sets.
+ m=v.match(/DM\s*[- ]?\s*(\d{1,2})(?!\d|[A-Z])/);
+ if(m)return 'DM'+String(Number(m[1]));
+ return '';
 }
-function codeFromCollector(number=''){
- const n=String(number||'').normalize('NFKC').toUpperCase();
- const code=n.match(/DM\s*\d{2}\s*[- ]?\s*(?:RP|EX|SD|BD|SP|ART|P|R)\s*[- ]?\s*\d{1,4}/);
- return code?normalizeProductCode(code[0]):'';
-}
+function codeFromCollector(number=''){return normalizeProductCode(number)}
 function codeFromProduct(product){
  const fromName=normalizeProductCode(product.name||'');
  if(fromName)return fromName;
  try{const u=new URL(product.url);return normalizeProductCode(decodeURIComponent(u.pathname))}catch{return ''}
+}
+function isPromotion(number='',product={}){
+ const name=String(product.name||'');const n=String(number||'').normalize('NFKC').toUpperCase();
+ return /プロモ|プロモーション|参加賞|配布|限定特典|付録|景品|PRカード/i.test(name)||/^(?:P\d+|PROMO|PR\d+)\b/.test(n)||/\bP\d+\s*\//.test(n);
+}
+function versionMatchesProduct(number='',product={}){
+ const c=codeFromCollector(number),p=codeFromProduct(product);
+ if(c&&p)return c===p;
+ // Promotional issues often use P-number instead of an expansion-set code.
+ if(!c&&isPromotion(number,product))return true;
+ return false;
 }
 function renderProductInfo(target,products,collectorNumber=''){
  const el=$(target);if(!el)return;
@@ -449,12 +482,13 @@ function renderProductInfo(target,products,collectorNumber=''){
  const exactCode=codeFromCollector(collectorNumber);
  el.innerHTML=products.map(p=>{
   const productCode=codeFromProduct(p);
-  const match=!!exactCode&&!!productCode&&exactCode===productCode;
-  return `<a class="pack-item${match?' pack-item-matched':''}" href="${escapeAttr(p.url)}" target="_blank" rel="noopener noreferrer"${match?' aria-label="このカードのコレクター番号に一致する収録商品"':''}>${match?'<strong class="pack-match-label">このバージョンの収録商品</strong>':''}${p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'公式商品ページ'}))">`:'<div class="pack-image-placeholder">公式商品ページ</div>'}<span>${escapeHtml(p.name)}</span></a>`;
+  const match=versionMatchesProduct(collectorNumber,p);
+  const promo=isPromotion(collectorNumber,p);
+  return `<a class="pack-item${match?' pack-item-matched':''}" href="${escapeAttr(p.url)}" target="_blank" rel="noopener noreferrer"${match?' aria-label="このカードのコレクター番号に一致する収録商品"':''}>${match?'<strong class="pack-match-label">このバージョンの収録商品</strong>':''}${p.image&&!promo?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'公式商品ページ'}))">`:`<div class="pack-image-placeholder">${promo?'プロモーションカード':p.legacyFallback?'旧商品・画像未登録':'公式商品ページ'}</div>`}<span>${escapeHtml(p.name)}</span></a>`;
  }).join('');
 }
 
-function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').innerHTML=escapeHtml(displayNameWithoutNumber(draft.name,draft.number)||'カード名を取得できません')+(draft.number?' <small class="name-number">('+escapeHtml(draft.number)+')</small>':'');$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=decorateAbilitySymbols(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';renderProductInfo('previewProducts',draft.products,draft.number);$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
+function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').innerHTML=escapeHtml(displayNameWithoutNumber(draft.name,draft.number)||'カード名を取得できません')+(draft.number?' <small class="name-number">('+escapeHtml(draft.number)+')</small>':'');$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=decorateAbilitySymbols(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';renderProductInfo('previewProducts',draft.products,draft.number);$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power||'—'],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
 function escapeAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 $('editPreview').onclick=()=>{$('editPanel').hidden=false;$('previewPanel').hidden=true;$('editName').value=draft.name;$('editCost').value=draft.cost;$('editNumber').value=draft.number;$('editType').value=draft.type||'';$('editCivilization').value=draft.civilization||'';$('editRarity').value=draft.rarity||'';$('editPower').value=draft.power||'';$('editRace').value=draft.race||'';$('editText').value=draft.text;$('editFlavor').value=draft.flavor||'';$('editImageUrl').value=draft.image;$('editImagePreview').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}">`:''};$('backToPreview').onclick=renderPreview;
 $('editImageFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;editedImage=await imageData(f);$('editImagePreview').innerHTML=`<img src="${editedImage}">`};$('applyEdit').onclick=()=>{draft.name=$('editName').value.trim();draft.cost=$('editCost').value.trim();draft.number=$('editNumber').value.trim();draft.type=$('editType').value.trim();draft.civilization=$('editCivilization').value.trim();draft.rarity=$('editRarity').value.trim();draft.power=$('editPower').value.trim();draft.race=$('editRace').value.trim();draft.text=normalizeRules($('editText').value);draft.flavor=$('editFlavor').value.trim();draft.image=$('editImageUrl').value.trim();if(editedImage)draft.image=editedImage;renderPreview()};
@@ -505,7 +539,7 @@ $('sortDesc').onclick=()=>{if(sortKey==='civilization')return;sortDirection='des
 $('tabRegistered').onclick=()=>{activeCollectionTab='registered';paintCollection()};$('tabWishlist').onclick=()=>{activeCollectionTab='wishlist';paintCollection()};
 $('backToCollection').onclick=()=>{selectedCardId=null;paintCollection()};
 function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;selectedCardId=id;$('collectionItems').hidden=true;$('cardDetail').hidden=false;
- const rows=[['コスト',c.cost],['コレクター番号',c.number],['カードタイプ',c.type],['文明',c.civilization],['レアリティ',c.rarity],['パワー',c.power],['種族',c.race]];
+ const rows=[['コスト',c.cost],['コレクター番号',c.number],['カードタイプ',c.type],['文明',c.civilization],['レアリティ',c.rarity],['パワー',c.power||'—'],['種族',c.race]];
  $('detailContent').innerHTML=`<h2>${escapeHtml(displayNameWithoutNumber(c.name,c.number))}${c.number?` <small class="name-number">(${escapeHtml(c.number)})</small>`:''}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(decorateAbilitySymbols(c.text)||'—')}</p></section>${c.flavor?`<section class="detail-text"><b>フレーバー</b><p>${escapeHtml(c.flavor)}</p></section>`:''}<section class="detail-text"><b>商品情報</b><div id="detailProducts" class="pack-grid"></div></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;renderProductInfo('detailProducts',c.products,c.number);
  $('toggleWanted').textContent=c.wanted?'購入予定から外す':'購入予定に追加';$('deleteCard').onclick=async()=>{if(!confirm('このカードを登録一覧から削除しますか？購入予定からも削除されます。'))return;await req(st('cards','readwrite').delete(c.id));selectedCardId=null;await load();paintCollection()};
 }

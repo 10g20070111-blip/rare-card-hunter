@@ -1,4 +1,4 @@
-// RARE CARD HUNTER — Cloudflare Worker v2.31.15
+// RARE CARD HUNTER — Cloudflare Worker v2.31.16
 // Live official search with bounded requests and useful diagnostics.
 const ORIGIN = 'https://dm.takaratomy.co.jp';
 const HEADERS = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
@@ -97,7 +97,7 @@ export default {async fetch(request,env,ctx){
   try{target=new URL(productUrl)}catch{return reply({error:'Invalid product URL'},400)}
   if(target.protocol!=='https:'||target.hostname!=='dm.takaratomy.co.jp'||!target.pathname.startsWith('/product/'))return reply({error:'Product must be an official product page'},400);
   const cache=typeof caches!=='undefined'?caches.default:null;
-  const cacheKey=new Request(new URL('/?product='+encodeURIComponent(target.href)+'&revision=23115',request.url).href);
+  const cacheKey=new Request(new URL('/?product='+encodeURIComponent(target.href)+'&revision=23116',request.url).href);
   if(cache){const hit=await cache.match(cacheKey);if(hit)return hit;}
   try{
    const d=await fetchHtml(target.href);

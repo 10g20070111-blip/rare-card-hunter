@@ -1,0 +1,6 @@
+RARE CARD HUNTER v2.31.16
+1. JSONバックアップを保存
+2. Cloudflare Workerを更新しDeploy
+3. GitHub PagesをZIP内のファイルで更新
+4. Ctrl+Shift+Rで再読み込み
+古い収録商品は公式カードページをリンク先として代用する場合があります。
