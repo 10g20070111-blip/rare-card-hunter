@@ -88,7 +88,7 @@ async function productImageFromOfficial(product){
  if(productImageCache.has(key))return productImageCache.get(key);
  const task=(async()=>{
   try{
-   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23111');
+   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23113');
    const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
    if(response.ok){const data=await response.json();if(data.image)return data.image;}
   }catch{}
@@ -290,6 +290,59 @@ async function fetchOfficialDetailHtml(url){
   return result.html;
  }finally{clearTimeout(timer)}
 }
+// v2.31.13: Read flavor from the actual labelled card fields, including both
+// faces of a twinpact. Never infer flavor from ordinary ability paragraphs.
+function officialFlavorFromHtml(doc){
+ const labels=/^フレーバー(?:[・\s　]*テキスト)?\s*[：:]?\s*$/;
+ const stop=/^(?:特殊能力|カード情報|商品情報|収録情報|関連カード|よくある質問|このカードのよくある質問|同名カードが含まれる商品|カード名|カードタイプ|文明|種族|コスト|パワー|レアリティ|イラスト|illus\.?|フレーバー(?:[・\s　]*テキスト)?)\s*[：:]?/i;
+ const tidy=s=>String(s||'').replace(/\u00a0/g,' ').replace(/[ \t]+/g,' ').replace(/\n\s*\n+/g,'\n').trim();
+ const results=[];
+ const push=s=>{s=tidy(s).replace(/^[-─―ー\s]+$/,'').trim();if(s&&s.length<=650&&!results.includes(s))results.push(s)};
+ // DOM field values are more trustworthy than page-wide regex matches.
+ const labelsFound=[...doc.querySelectorAll('dt,th,strong,b,h2,h3,h4,span,p,div')]
+  .filter(n=>n.children.length===0&&labels.test(tidy(n.textContent)));
+ for(const label of labelsFound){
+  let value='';
+  if(label.matches('dt,th'))value=label.nextElementSibling?.textContent||'';
+  if(!value&&label.parentElement){
+   const parent=label.parentElement;
+   if(parent.children.length<=5){
+    const clone=parent.cloneNode(true);
+    const counterpart=[...clone.querySelectorAll('*')].find(x=>x.children.length===0&&labels.test(tidy(x.textContent)));
+    counterpart?.remove();
+    value=clone.textContent||'';
+   }
+  }
+  if(!value){let next=label.nextElementSibling; if(next&&!stop.test(tidy(next.textContent).slice(0,40)))value=next.textContent||'';}
+  value=tidy(value);
+  if(value&&!stop.test(value.slice(0,40)))push(value);
+ }
+ // The HTML can put the label and text in one node, or use line breaks.
+ const root=doc.querySelector('main')||doc.body;
+ if(root){
+  const clone=root.cloneNode(true);
+  clone.querySelectorAll('script,style,nav,header,footer').forEach(n=>n.remove());
+  clone.querySelectorAll('br').forEach(n=>n.replaceWith('\n'));
+  clone.querySelectorAll('p,li,dt,dd,th,td,h2,h3,h4').forEach(n=>n.append('\n'));
+  const lines=(clone.textContent||'').split(/\n/).map(tidy).filter(Boolean);
+  for(let i=0;i<lines.length;i++){
+   const line=lines[i];
+   const inline=line.match(/^フレーバー(?:[・\s　]*テキスト)?\s*[：:]\s*(.+)$/);
+   if(inline){push(inline[1]);continue;}
+   if(!labels.test(line))continue;
+   const parts=[];
+   for(let j=i+1;j<lines.length&&j<=i+8;j++){
+    const next=lines[j];
+    if(stop.test(next)||/^(?:DM\d{2}|DMRP|DMEX|DMBD|DMART)[-\s]/i.test(next))break;
+    if(/^[―─ー\-\s]+$/.test(next))continue;
+    parts.push(next);
+    if(parts.join('').length>650)break;
+   }
+   if(parts.length)push(parts.join('\n'));
+  }
+ }
+ return results.join('\n\n').slice(0,1200);
+}
 function officialHtmlDetails(html,url){
  const doc=new DOMParser().parseFromString(html,'text/html');
  doc.querySelectorAll('script,style,svg,noscript,header,footer,nav').forEach(n=>n.remove());
@@ -301,7 +354,7 @@ function officialHtmlDetails(html,url){
  copy.querySelectorAll('li,p,h1,h2,h3,h4,dt,dd,tr').forEach(n=>n.appendChild(doc.createTextNode('\n')));
  const text=(copy.textContent||'').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n[ \t]*/g,'\n');
  const part=text.match(/フレーバー(?:テキスト)?\s*\n?\s*(?:[-─]{2,}\s*)?([\s\S]*?)(?=\s*(?:商品情報|このカードのよくある質問|同名カードが含まれる商品|関連カード|よくある質問|$))/);
- const flavor=(part?.[1]||'').split('\n').map(x=>x.trim()).filter(Boolean).filter(x=>!/^[-─]{2,}$/.test(x)).join(' ').trim();
+ const flavor=officialFlavorFromHtml(doc)||(part?.[1]||'').split('\n').map(x=>x.trim()).filter(Boolean).filter(x=>!/^[-─]{2,}$/.test(x)).join(' ').trim();
  // Only official product URLs; these can include same-name reprint products.
  const products=[],seen=new Set();
  for(const a of doc.querySelectorAll('a[href]')){
@@ -311,7 +364,7 @@ function officialHtmlDetails(html,url){
   if(!name||name==='商品情報'||!/^DM(?:\d{2}|RP|BD|EX|ART)/i.test(name)||seen.has(href.href))continue;
   seen.add(href.href);products.push({name,url:href.href,image:''});
  }
- return {flavor:flavor.length<=500?flavor:'',products:products.slice(0,30)};
+ return {flavor:flavor.length<=1200?flavor:'',products:products.slice(0,30)};
 }
 $('fetchPage').onclick=async()=>{
  const url=validUrl($('sourceUrl').value.trim());

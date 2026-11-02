@@ -1,0 +1,6 @@
+RARE CARD HUNTER v2.31.12
+1. コレクションをバックアップ
+2. Cloudflare Worker に search-worker.js を貼り付けて Deploy
+3. GitHub Pages を ZIP 内の内容で更新
+4. Ctrl+Shift+R で再読み込み
+商品一覧・商品内容欄から商品パッケージ画像を優先取得。

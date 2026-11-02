@@ -1,4 +1,4 @@
-// RARE CARD HUNTER — Cloudflare Worker v2.31.11
+// RARE CARD HUNTER — Cloudflare Worker v2.31.13
 // Live official search with bounded requests and useful diagnostics.
 const ORIGIN = 'https://dm.takaratomy.co.jp';
 const HEADERS = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
@@ -103,56 +103,72 @@ export default {async fetch(request,env,ctx){
    const d=await fetchHtml(target.href);
    if(d.status!==200)return reply({error:'Official product HTTP '+d.status},502);
    const html=d.html;
-   // Product art must come from the product's own hero, never from its card list.
-   // Card thumbnails are often portrait too; dimensions alone cannot identify packaging.
-   const title=plain((html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)||[])[1]||'');
    const slug=target.pathname.split('/').filter(Boolean).pop()||'';
-   const cardBoundary=html.search(/(?:id|class)\s*=\s*["'][^"']*(?:cardlist|card-list|cardList|card_list)[^"']*["']|カードリスト|収録カード/i);
-   const scope=cardBoundary>0?html.slice(0,cardBoundary):html;
-   const candidates=[];
-   for(const m of scope.matchAll(/<img\b[^>]*>/gi)){
-    const tag=m[0],alt=attr(tag,'alt'),cls=attr(tag,'class');
-    for(const key of ['data-src','data-original','data-lazy-src','src','data-srcset','srcset']){
-     let src=attr(tag,key);if(!src)continue;
-     if(key.endsWith('srcset'))src=src.split(',')[0].trim().split(/\s+/)[0];
-     candidates.push({src,alt,cls,pos:m.index||0,tag});
+   const imageCandidates=[];
+   const add=(src,weight,source)=>{
+    if(!src)return;
+    let url;try{url=new URL(decode(src),d.url)}catch{return}
+    if(url.protocol!=='https:'||!(url.hostname==='dm.takaratomy.co.jp'||url.hostname.endsWith('.dm.takaratomy.co.jp'))||!(/\.(png|jpe?g|webp)$/i.test(url.pathname)))return;
+    if(/cardimage|cardthumb|\/card\/|\/cards\/|logo|icon|banner|bnr|noimage|placeholder|sprite/i.test(url.pathname))return;
+    imageCandidates.push({url:url.href,weight,source});
+   };
+   // Product pages have a 商品内容 section with the actual package photograph.
+   // Do not scan the card-list section: its images are individual trading cards.
+   const contentAt=html.indexOf('商品内容');
+   const listAt=html.search(/カードリスト|収録カード|class=["'][^"']*cardlist/i);
+   if(contentAt>=0){
+    const section=html.slice(contentAt, listAt>contentAt?Math.min(listAt,contentAt+14000):contentAt+14000);
+    for(const m of section.matchAll(/<img\b[^>]*>/gi)){
+     const tag=m[0], alt=attr(tag,'alt');
+     const weight=alt.includes('DM')||alt.includes('デュエル')?150:115;
+     for(const k of ['data-src','data-original','src'])add(attr(tag,k),weight,'product-content');
     }
    }
-   const metaTags=[...html.matchAll(/<meta\b[^>]*>/gi)].map(m=>m[0]);
-   for(const tag of metaTags){
-    if(/^(?:og:image|og:image:secure_url|twitter:image)$/i.test(attr(tag,'property')||attr(tag,'name')))
-     candidates.push({src:attr(tag,'content'),alt:'',cls:'metadata',pos:-1,tag});
+   // The product's hero image is usually before the explanatory/card-list images.
+   const safeHtml=html.slice(0,listAt>0?listAt:Math.min(html.length,25000));
+   for(const m of safeHtml.matchAll(/<img\b[^>]*>/gi)){
+    const tag=m[0], alt=attr(tag,'alt'), cls=attr(tag,'class');
+    if(/カードをタップ|カード一覧|収録カード|クリーチャー/i.test(alt))continue;
+    let weight=10;
+    if(/DM\d{2}[- ]?(RP|EX|SD|BD|SP)/i.test(alt))weight+=75;
+    if(/商品|パック|デッキ|pack|package/i.test(alt+' '+cls))weight+=55;
+    if(m.index<18000)weight+=20;
+    for(const k of ['data-src','data-original','src'])add(attr(tag,k),weight,'hero');
    }
-   const seen=new Set(),ranked=[];
-   const normTitle=norm(title).slice(0,22);
-   for(const item of candidates){
-    let url;try{url=new URL(decode(item.src),d.url)}catch{continue}
-    if(url.protocol!=='https:'||!(url.hostname==='dm.takaratomy.co.jp'||url.hostname.endsWith('.dm.takaratomy.co.jp'))||!/\.(?:png|jpe?g|webp)$/i.test(url.pathname)||seen.has(url.href))continue;
-    seen.add(url.href);
-    const path=url.pathname.toLowerCase(),ctx=(item.alt+' '+item.cls).toLowerCase();
-    // Strict exclusion: an absent pack image is better than a misleading card image.
-    if(/cardimage|cardthumb|card[_-]?(?:img|list)|\/cards?\/|\/card\/|logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|noimage|loading|spinner|placeholder|sprite|poster|kv|campaign/i.test(path+' '+ctx))continue;
-    if(/カード一覧|収録カード|カード画像|カードリスト|クリーチャー/i.test(item.alt))continue;
-    const w=Number(attr(item.tag,'width')),h=Number(attr(item.tag,'height'));
-    let score=0;
-    if(item.alt&&normTitle&&norm(item.alt).includes(normTitle))score+=120;
-    if(slug&&path.includes(slug.toLowerCase()))score+=35;
-    if(/pack|package|パック|パッケージ|商品画像|商品写真|商品メイン|deck|デッキ/i.test(ctx+' '+path))score+=55;
-    if(/product|main|item|thumb/i.test(ctx+' '+path))score+=12;
-    if(/metadata/.test(item.cls))score+=8;
-    if(/visual|hero|slide|carousel|background|wide/i.test(ctx+' '+path))score-=50;
-    if(w&&h){if(h>w*1.25)score+=15;else if(w>h*1.35)score-=40;}
-    if(item.pos>=0)score+=Math.max(0,12-item.pos/10000);
-    ranked.push({url:url.href,score,alt:item.alt});
+   // The official product index supplies the exact cover image next to the
+   // matching product link. This is safer than guessing from card images.
+   const indexPages=['/product/','/product/expansion/','/product/deck/'];
+   const listings=await Promise.allSettled(indexPages.map(async path=>{
+    const r=await fetchHtml(ORIGIN+path);return r.status===200?r.html:'';
+   }));
+   for(const entry of listings){
+    if(entry.status!=='fulfilled')continue;
+    const listing=entry.value;
+    const links=[...listing.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>/gi)];
+    for(const m of links){
+     let href;try{href=new URL(decode(m[1]),ORIGIN)}catch{continue}
+     if(href.pathname.replace(/\/$/,'')!==target.pathname.replace(/\/$/,''))continue;
+     const near=listing.slice(Math.max(0,m.index-1500),Math.min(listing.length,m.index+1800));
+     // The image may be inside the anchor or in the same product tile.
+     for(const im of near.matchAll(/<img\b[^>]*>/gi)){
+      const tag=im[0],alt=attr(tag,'alt');
+      if(/カードをタップ|カードリスト|収録カード/i.test(alt))continue;
+      const weight=alt.toLowerCase().includes(slug.toLowerCase())?250:alt.includes('DM')?210:170;
+      for(const k of ['data-src','data-original','src'])add(attr(tag,k),weight,'product-index');
+     }
+    }
    }
-   ranked.sort((a,b)=>b.score-a.score);
-   // Do not substitute an arbitrary card picture if the official product page lacks artwork.
-   const best=ranked.find(x=>x.score>=22);
+   // Use metadata only if product-specific candidates do not exist.
+   for(const m of html.matchAll(/<meta\b[^>]*>/gi)){
+    const tag=m[0];if(/^(og:image|twitter:image)$/i.test(attr(tag,'property')||attr(tag,'name')))add(attr(tag,'content'),30,'metadata');
+   }
+   const unique=[...new Map(imageCandidates.map(x=>[x.url,x])).values()].sort((a,b)=>b.weight-a.weight);
+   const best=unique[0];
    const originalImage=best?.url||'';
    const image=originalImage?new URL('/?image='+encodeURIComponent(originalImage),request.url).href:'';
-   const result={image,originalImage,source:'official-product',url:d.url,candidates:ranked.length,selection:'product-hero-only',missing:!image};
+   const result={image,originalImage,source:'official-product',url:d.url,candidates:unique.length,selection:best?.source||'missing',missing:!image};
    const response=reply(result);
-   response.headers.set('Cache-Control','public, max-age=86400, s-maxage=604800');
+   response.headers.set('Cache-Control',image?'public, max-age=86400, s-maxage=86400':'public, max-age=300, s-maxage=300');
    if(cache)ctx.waitUntil(cache.put(cacheKey,response.clone()));
    return response;
   }catch(e){return reply({error:'Product image lookup failed: '+String(e.message||e)},502)}
