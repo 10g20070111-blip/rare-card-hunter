@@ -81,3 +81,5 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 /* v2.31.16: make the independently parsed power field visually explicit. */
 .pack-item-matched{outline:2px solid #ffe48b;outline-offset:1px}
 .pack-image-placeholder{font-size:.8rem}
+
+.product-category{margin:12px 0 20px}.product-category h3{font-size:.9rem;color:#f3cd6a;margin:0 0 6px}.product-category .pack-grid{margin-top:8px}.text-block p,.detail-text p{white-space:pre-wrap;line-height:1.75}
