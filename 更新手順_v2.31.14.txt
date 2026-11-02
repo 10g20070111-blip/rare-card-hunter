@@ -1,0 +1,7 @@
+RARE CARD HUNTER v2.31.14
+1. 既存コレクションをバックアップしてください。
+2. Cloudflare Workerを同梱のsearch-worker.jsで更新してDeploy。
+3. ZIP内のrare_card_hunterフォルダの中身をGitHub Pagesへ配置。
+4. Ctrl+Shift+Rで再読み込み。
+5. コレクター番号のセットコードが商品名のセットコードと完全一致する商品だけ金色の枠になります。
+※ 画像取得は公式サイトの掲載状況に依存します。

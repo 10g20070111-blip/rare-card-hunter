@@ -73,3 +73,7 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 
 /* v2.31.11: keep full packaging visible without stretching */
 .pack-item img{object-fit:contain;content-visibility:auto}
+
+/* v2.31.14: exact set match for the card's collector-number version */
+.pack-item-matched{border:3px solid #f8c94e!important;box-shadow:0 0 0 2px rgba(248,201,78,.2),0 0 18px rgba(248,201,78,.25);background:#2c2630}
+.pack-match-label{display:block;font-size:.73rem;color:#211900;background:#ffda63;padding:3px 8px;border-radius:999px;text-align:center}

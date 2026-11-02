@@ -1,4 +1,4 @@
-// RARE CARD HUNTER — Cloudflare Worker v2.31.13
+// RARE CARD HUNTER — Cloudflare Worker v2.31.14
 // Live official search with bounded requests and useful diagnostics.
 const ORIGIN = 'https://dm.takaratomy.co.jp';
 const HEADERS = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
@@ -97,7 +97,7 @@ export default {async fetch(request,env,ctx){
   try{target=new URL(productUrl)}catch{return reply({error:'Invalid product URL'},400)}
   if(target.protocol!=='https:'||target.hostname!=='dm.takaratomy.co.jp'||!target.pathname.startsWith('/product/'))return reply({error:'Product must be an official product page'},400);
   const cache=typeof caches!=='undefined'?caches.default:null;
-  const cacheKey=new Request(new URL('/?product='+encodeURIComponent(target.href),request.url).href);
+  const cacheKey=new Request(new URL('/?product='+encodeURIComponent(target.href)+'&revision=23114',request.url).href);
   if(cache){const hit=await cache.match(cacheKey);if(hit)return hit;}
   try{
    const d=await fetchHtml(target.href);
@@ -137,9 +137,9 @@ export default {async fetch(request,env,ctx){
    }
    // The official product index supplies the exact cover image next to the
    // matching product link. This is safer than guessing from card images.
-   const indexPages=['/product/','/product/expansion/','/product/deck/'];
+   const indexPages= /(?:SD|BD)/i.test(slug)?['/product/deck/','/product/']:['/product/expansion/','/product/'];
    const listings=await Promise.allSettled(indexPages.map(async path=>{
-    const r=await fetchHtml(ORIGIN+path);return r.status===200?r.html:'';
+    const r=await fetch(ORIGIN+path,{headers:{Accept:'text/html'},cf:{cacheEverything:true,cacheTtl:3600},signal:AbortSignal.timeout(4500)});return r.ok?await r.text():'';
    }));
    for(const entry of listings){
     if(entry.status!=='fulfilled')continue;
@@ -148,12 +148,12 @@ export default {async fetch(request,env,ctx){
     for(const m of links){
      let href;try{href=new URL(decode(m[1]),ORIGIN)}catch{continue}
      if(href.pathname.replace(/\/$/,'')!==target.pathname.replace(/\/$/,''))continue;
-     const near=listing.slice(Math.max(0,m.index-1500),Math.min(listing.length,m.index+1800));
+     const close=listing.indexOf('</a>',m.index);const near=listing.slice(m.index,close>m.index&&close-m.index<3500?close+4:Math.min(listing.length,m.index+650));
      // The image may be inside the anchor or in the same product tile.
      for(const im of near.matchAll(/<img\b[^>]*>/gi)){
       const tag=im[0],alt=attr(tag,'alt');
       if(/カードをタップ|カードリスト|収録カード/i.test(alt))continue;
-      const weight=alt.toLowerCase().includes(slug.toLowerCase())?250:alt.includes('DM')?210:170;
+      const weight=(alt.toLowerCase().includes(slug.toLowerCase())||attr(tag,'src').toLowerCase().includes(slug.toLowerCase()))?290:/パック|デッキ|商品|pack|package/i.test(alt)?230:170;
       for(const k of ['data-src','data-original','src'])add(attr(tag,k),weight,'product-index');
      }
     }
