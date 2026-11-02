@@ -88,16 +88,11 @@ async function productImageFromOfficial(product){
  if(productImageCache.has(key))return productImageCache.get(key);
  const task=(async()=>{
   try{
-   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);
+   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23111');
    const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
    if(response.ok){const data=await response.json();if(data.image)return data.image;}
   }catch{}
-  try{
-   const md=await fetchReader(product.url);
-   const candidates=[...md.matchAll(/!\[[^\]]*\]\((https?:\/\/[^)\s]+\.(?:png|jpe?g|webp)(?:\?[^)]*)?)\)/gi)]
-    .map(m=>m[1]).filter(u=>/dm\.takaratomy\.co\.jp/i.test(u)&&!/logo|icon|banner|menu|header|footer|sns|twitter|btn|cardimage/i.test(u));
-   return candidates[0]||'';
-  }catch{return ''}
+  return '';
  })();productImageCache.set(key,task);return task;
 }
 async function enrichProducts(card){
@@ -356,7 +351,7 @@ function raceMarkup(value=''){return escapeHtml(value).replace(/\s*\/\s*/g,'<wbr
 function renderProductInfo(target,products){
  const el=$(target);if(!el)return;
  if(!products?.length){el.innerHTML='<p class="hint">収録商品情報は取得できませんでした。</p>';return;}
- el.innerHTML=products.map(p=>`<a class="pack-item" href="${escapeAttr(p.url)}" target="_blank" rel="noopener noreferrer">${p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'公式商品ページ'}))">`:'<div class="pack-image-placeholder">公式商品ページ</div>'}<span>${escapeHtml(p.name)}</span></a>`).join('');
+ el.innerHTML=products.map(p=>`<a class="pack-item" href="${escapeAttr(p.url)}" target="_blank" rel="noopener noreferrer">${p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'公式商品ページ'}))">`:'<div class="pack-image-placeholder">公式商品ページ</div>'}<span>${escapeHtml(p.name)}</span></a>`).join('');
 }
 function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').innerHTML=escapeHtml(draft.name||'カード名を取得できません')+(draft.number?' <small class="name-number">('+escapeHtml(draft.number)+')</small>':'');$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=normalizeRules(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';renderProductInfo('previewProducts',draft.products);$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
 function escapeAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}

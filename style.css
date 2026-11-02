@@ -70,3 +70,6 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 .pack-item img,.pack-image-placeholder{display:block;width:min(100%,223px);aspect-ratio:223/435;object-fit:contain;border-radius:5px}
 .pack-image-placeholder{display:grid;place-items:center;text-align:center;background:#29233a;color:#bdb2ce;padding:8px}
 .pack-item span{text-align:center}
+
+/* v2.31.11: keep full packaging visible without stretching */
+.pack-item img{object-fit:contain;content-visibility:auto}

@@ -1,4 +1,4 @@
-// RARE CARD HUNTER — Cloudflare Worker v2.31.10
+// RARE CARD HUNTER — Cloudflare Worker v2.31.11
 // Live official search with bounded requests and useful diagnostics.
 const ORIGIN = 'https://dm.takaratomy.co.jp';
 const HEADERS = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
@@ -71,7 +71,7 @@ async function probeImage(src){
   const data=await r.arrayBuffer();return imageSize(data,r.headers.get('content-type')||'');
  }catch{return null}
 }
-export default {async fetch(request){
+export default {async fetch(request,env,ctx){
  if(request.method==='OPTIONS')return new Response(null,{headers:HEADERS});
  if(request.method!=='GET')return reply({error:'GET only'},405);
  const u=new URL(request.url);
@@ -81,10 +81,14 @@ export default {async fetch(request){
   // Only fetch images hosted on the official domain; prevent open proxy use.
   if(target.protocol!=='https:'||!(target.hostname==='dm.takaratomy.co.jp'||target.hostname.endsWith('.dm.takaratomy.co.jp'))||! /\.(?:png|jpe?g|webp)$/i.test(target.pathname))return reply({error:'Image URL not allowed'},400);
   try{
+   const imageCache=typeof caches!=='undefined'?caches.default:null;
+   if(imageCache){const hit=await imageCache.match(request);if(hit)return hit;}
    const response=await fetch(target.href,{headers:{Accept:'image/avif,image/webp,image/png,image/jpeg,image/*','Referer':ORIGIN+'/','User-Agent':'Mozilla/5.0'},redirect:'follow'});
    const type=(response.headers.get('content-type')||'').split(';')[0].toLowerCase();
    if(!response.ok||!['image/jpeg','image/png','image/webp','image/avif'].includes(type))return reply({error:'Official image unavailable',status:response.status,type},502);
-   return new Response(response.body,{status:200,headers:{'Content-Type':type,'Cache-Control':'public, max-age=86400','Access-Control-Allow-Origin':'*','X-Content-Type-Options':'nosniff'}});
+   const out=new Response(response.body,{status:200,headers:{'Content-Type':type,'Cache-Control':'public, max-age=2592000, s-maxage=2592000','Access-Control-Allow-Origin':'*','X-Content-Type-Options':'nosniff'}});
+   if(imageCache)ctx.waitUntil(imageCache.put(request,out.clone()));
+   return out;
   }catch(e){return reply({error:'Image proxy failed: '+String(e.message||e)},502)}
  }
  const productUrl=u.searchParams.get('product');
@@ -92,71 +96,65 @@ export default {async fetch(request){
   let target;
   try{target=new URL(productUrl)}catch{return reply({error:'Invalid product URL'},400)}
   if(target.protocol!=='https:'||target.hostname!=='dm.takaratomy.co.jp'||!target.pathname.startsWith('/product/'))return reply({error:'Product must be an official product page'},400);
+  const cache=typeof caches!=='undefined'?caches.default:null;
+  const cacheKey=new Request(new URL('/?product='+encodeURIComponent(target.href),request.url).href);
+  if(cache){const hit=await cache.match(cacheKey);if(hit)return hit;}
   try{
    const d=await fetchHtml(target.href);
    if(d.status!==200)return reply({error:'Official product HTTP '+d.status},502);
    const html=d.html;
-   // Extract images from metadata, lazy-load attributes, srcset, and CSS background URLs.
-   const metas=[...html.matchAll(/<meta\b[^>]*>/gi)].map(m=>m[0]);
-   const metaImage=metas.filter(tag=>/^(?:og:image(?::secure_url)?|twitter:image)$/i.test(attr(tag,'property')||attr(tag,'name'))).map(tag=>attr(tag,'content'));
-   const imgTags=[...html.matchAll(/<img\b[^>]*>/gi)].map(m=>m[0]);
-   const imageCandidates=[];
-   // Keep HTML position and alt text: official product photography is usually
-   // inside the product content, whereas the first og:image can be a banner.
-   for(const m of html.matchAll(/<img\b[^>]*>/gi)){
-    const tag=m[0], alt=attr(tag,'alt'), cls=attr(tag,'class');
-    for(const key of ['data-src','data-original','data-lazy-src','data-image','src']){
-     const src=attr(tag,key);if(src)imageCandidates.push({src,alt,cls,pos:m.index||0,tag});
-    }
-    for(const key of ['data-srcset','srcset']){
-     for(const part of attr(tag,key).split(',')){
-      const src=part.trim().split(/\s+/)[0];if(src)imageCandidates.push({src,alt,cls,pos:m.index||0,tag});
-     }
-    }
-   }
-   for(const src of metaImage)if(src)imageCandidates.push({src,alt:'',cls:'metadata',pos:-1,tag:''});
-   for(const m of html.matchAll(/(?:background-image\s*:\s*url\(|data-bg\s*=\s*['"])(?:['"]?)([^'"\)\s]+\.(?:png|jpe?g|webp)(?:\?[^'"\)\s]*)?)/gi))imageCandidates.push({src:m[1],alt:'',cls:'background',pos:m.index||0,tag:''});
-   const byUrl=new Map();
-   for(const item of imageCandidates){
-    let url;try{url=new URL(decode(item.src),d.url)}catch{continue}
-    if(url.protocol!=='https:'||!(url.hostname==='dm.takaratomy.co.jp'||url.hostname.endsWith('.dm.takaratomy.co.jp'))||!/\.(?:png|jpe?g|webp)$/i.test(url.pathname))continue;
-    if(/logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|cardimage|noimage|loading|spinner|placeholder|sprite/i.test(url.pathname))continue;
-    if(!byUrl.has(url.href))byUrl.set(url.href,{...item,url:url.href});
-   }
+   // Product art must come from the product's own hero, never from its card list.
+   // Card thumbnails are often portrait too; dimensions alone cannot identify packaging.
    const title=plain((html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)||[])[1]||'');
    const slug=target.pathname.split('/').filter(Boolean).pop()||'';
-   const items=[...byUrl.values()];
-   function initialScore(item){
-    const u=item.url,context=(item.alt+' '+item.cls+' '+item.tag).toLowerCase();
-    const width=Number(attr(item.tag,'width')),height=Number(attr(item.tag,'height'));
-    let score=0;
-    if(/pack|package|パック|パッケージ|商品画像|商品写真|商品メイン/i.test(context+' '+u))score+=12;
-    if(/product|main|item|thumb/i.test(context+' '+u))score+=6;
-    if(slug&&u.toLowerCase().includes(slug.toLowerCase()))score+=5;
-    if(/og:image|metadata/i.test(item.cls))score-=5;
-    if(/kv|visual|campaign|hero|wide|slide|carousel|background/i.test(context+' '+u))score-=12;
-    if(width&&height){if(height>width*1.25)score+=35;else if(width>height*1.4)score-=20;}
-    if(item.pos>=0)score+=Math.max(0,5-item.pos/25000);
-    return score;
-   }
-   items.sort((a,b)=>initialScore(b)-initialScore(a));
-   // Test dimensions instead of assuming that the first image is the pack.
-   // Limit probes to keep Worker response times and upstream traffic bounded.
-   const checks=await Promise.all(items.slice(0,12).map(async item=>({item,size:await probeImage(item.url)})));
-   const ranked=checks.map(({item,size})=>{
-    let score=initialScore(item);
-    if(size&&size.w&&size.h){
-     const ratio=size.h/size.w;
-     if(ratio>=1.35)score+=100; // vertical booster wrapper / deck box
-     else if(ratio>=1.05)score+=30;
-     else if(ratio<0.85)score-=65; // landscape promotional banners
-     if(size.w<130||size.h<130)score-=40;
+   const cardBoundary=html.search(/(?:id|class)\s*=\s*["'][^"']*(?:cardlist|card-list|cardList|card_list)[^"']*["']|カードリスト|収録カード/i);
+   const scope=cardBoundary>0?html.slice(0,cardBoundary):html;
+   const candidates=[];
+   for(const m of scope.matchAll(/<img\b[^>]*>/gi)){
+    const tag=m[0],alt=attr(tag,'alt'),cls=attr(tag,'class');
+    for(const key of ['data-src','data-original','data-lazy-src','src','data-srcset','srcset']){
+     let src=attr(tag,key);if(!src)continue;
+     if(key.endsWith('srcset'))src=src.split(',')[0].trim().split(/\s+/)[0];
+     candidates.push({src,alt,cls,pos:m.index||0,tag});
     }
-    return {item,size,score};
-   }).sort((a,b)=>b.score-a.score);
-   const originalImage=ranked[0]?.item.url||items[0]?.url||'';
+   }
+   const metaTags=[...html.matchAll(/<meta\b[^>]*>/gi)].map(m=>m[0]);
+   for(const tag of metaTags){
+    if(/^(?:og:image|og:image:secure_url|twitter:image)$/i.test(attr(tag,'property')||attr(tag,'name')))
+     candidates.push({src:attr(tag,'content'),alt:'',cls:'metadata',pos:-1,tag});
+   }
+   const seen=new Set(),ranked=[];
+   const normTitle=norm(title).slice(0,22);
+   for(const item of candidates){
+    let url;try{url=new URL(decode(item.src),d.url)}catch{continue}
+    if(url.protocol!=='https:'||!(url.hostname==='dm.takaratomy.co.jp'||url.hostname.endsWith('.dm.takaratomy.co.jp'))||!/\.(?:png|jpe?g|webp)$/i.test(url.pathname)||seen.has(url.href))continue;
+    seen.add(url.href);
+    const path=url.pathname.toLowerCase(),ctx=(item.alt+' '+item.cls).toLowerCase();
+    // Strict exclusion: an absent pack image is better than a misleading card image.
+    if(/cardimage|cardthumb|card[_-]?(?:img|list)|\/cards?\/|\/card\/|logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|noimage|loading|spinner|placeholder|sprite|poster|kv|campaign/i.test(path+' '+ctx))continue;
+    if(/カード一覧|収録カード|カード画像|カードリスト|クリーチャー/i.test(item.alt))continue;
+    const w=Number(attr(item.tag,'width')),h=Number(attr(item.tag,'height'));
+    let score=0;
+    if(item.alt&&normTitle&&norm(item.alt).includes(normTitle))score+=120;
+    if(slug&&path.includes(slug.toLowerCase()))score+=35;
+    if(/pack|package|パック|パッケージ|商品画像|商品写真|商品メイン|deck|デッキ/i.test(ctx+' '+path))score+=55;
+    if(/product|main|item|thumb/i.test(ctx+' '+path))score+=12;
+    if(/metadata/.test(item.cls))score+=8;
+    if(/visual|hero|slide|carousel|background|wide/i.test(ctx+' '+path))score-=50;
+    if(w&&h){if(h>w*1.25)score+=15;else if(w>h*1.35)score-=40;}
+    if(item.pos>=0)score+=Math.max(0,12-item.pos/10000);
+    ranked.push({url:url.href,score,alt:item.alt});
+   }
+   ranked.sort((a,b)=>b.score-a.score);
+   // Do not substitute an arbitrary card picture if the official product page lacks artwork.
+   const best=ranked.find(x=>x.score>=22);
+   const originalImage=best?.url||'';
    const image=originalImage?new URL('/?image='+encodeURIComponent(originalImage),request.url).href:'';
-   return reply({image,originalImage,source:'official-product',url:d.url,candidates:items.length,selectedDimensions:ranked[0]?.size||null,selection:"portrait-pack-preferred"});
+   const result={image,originalImage,source:'official-product',url:d.url,candidates:ranked.length,selection:'product-hero-only',missing:!image};
+   const response=reply(result);
+   response.headers.set('Cache-Control','public, max-age=86400, s-maxage=604800');
+   if(cache)ctx.waitUntil(cache.put(cacheKey,response.clone()));
+   return response;
   }catch(e){return reply({error:'Product image lookup failed: '+String(e.message||e)},502)}
  }
  const detailId=u.searchParams.get('detail');

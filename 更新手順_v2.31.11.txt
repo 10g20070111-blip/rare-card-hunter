@@ -1,0 +1,6 @@
+RARE CARD HUNTER v2.31.11
+1. コレクションをバックアップ
+2. search-worker.js をCloudflare Workerに貼り付けDeploy
+3. GitHub Pagesへアプリファイルを上書き
+4. Ctrl+Shift+Rで再読み込み
+商品画像は公式商品ページのメイン領域から選択します。見つからない古い商品は誤ったカード画像の代わりにプレースホルダーを表示します。
