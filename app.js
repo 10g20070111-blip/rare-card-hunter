@@ -32,28 +32,34 @@ function normalizeRules(raw=''){
 }
 // Official reader data is split by its labelled sections, not guessed from ability words.
 function officialSections(raw=''){
+ // Jina's Markdown and the official HTML-to-text output have different heading formats.
+ // Extract the two official sections separately so an absent heading never erases the other.
  const lines=String(raw||'').replace(/\r/g,'').split('\n');
- const strip=x=>String(x).trim().replace(/^#{1,6}\s*/,'').replace(/^\*\*\s*|\s*\*\*$/g,'').replace(/[：:]\s*$/,'').trim();
- const isRule=x=>/^(特殊能力|カードテキスト|能力テキスト|テキスト)$/.test(strip(x));
- const isFlavor=x=>/^(フレーバー|フレーバーテキスト)$/.test(strip(x));
- const isStop=x=>/^(商品情報|同名カードが含まれる商品(?:を表示)?|関連カード|収録情報|このカードのよくある質問|よくある質問|カードのFAQ|カード検索|カード詳細|イラストレーター)$/.test(strip(x));
- const begin=lines.findIndex(x=>isRule(x));
- if(begin<0)return {rules:'',flavor:''};
- let state='rules',rules=[],flavor=[];
- for(let i=begin+1;i<lines.length;i++){
-  let line=lines[i].trim();
-  if(isFlavor(line)){state='flavor';continue;}
-  if(isStop(line)||/^(?:\*\s*){1,4}(?:商品情報|このカードのよくある質問|同名カードが含まれる商品)/.test(line))break;
-  // Product listing begins immediately after the flavor, often without a label.
-  if(state==='flavor'&&/^(?:[-*+]\s*)?(?:DM\d{2}(?:[- ]|[A-Z])|DMR[P-]|DMBD|DMEX|DMART|プロモ限定カード)/i.test(line))break;
-  if(isRule(line))continue;
-  if(!line||/^[-_*─]{3,}$/.test(line))continue;
-  if(/^#{1,6}\s/.test(line))break;
-  if(/^https?:\/\//i.test(line))break;
-  line=line.replace(/^\s*[-*+]\s+(?=\S)/,'■ ').replace(/^\s*※\s*/,'■ ').replace(/^\s*>\s*/,'');
-  if(state==='rules')rules.push(line);else flavor.push(line);
- }
- return {rules:rules.join('\n'),flavor:cleanText(flavor.join('\n'))};
+ const label=line=>String(line||'').trim().replace(/^#{1,6}\s*/,'')
+   .replace(/^\*{1,2}\s*|\s*\*{1,2}$/g,'').replace(/[:：]\s*$/,'').trim();
+ const ruleHead=x=>/^(特殊能力|カードテキスト|能力テキスト)$/.test(label(x));
+ const flavorHead=x=>/^(フレーバー|フレーバーテキスト)$/.test(label(x));
+ const stopHead=x=>/^(商品情報|このカードのよくある質問|よくある質問|同名カードが含まれる商品(?:を表示)?|収録情報|関連カード)$/.test(label(x));
+ const noise=x=>/^(?:\s*[-_*─]{3,}\s*|\s*)$/.test(x);
+ const stopLine=x=>stopHead(x)||/^\s*(?:[-*+]\s*){1,5}(?:商品情報|このカードのよくある質問|同名カードが含まれる商品)/.test(x)
+   ||/^\s*(?:[-*+]\s*)?(?:\[[^\]]+\]\([^)]*\)\s*)?(?:DM\d{2}[- ]|DMRP|DMBD|DMEX|DMART|プロモ限定カード)/i.test(x)
+   ||/^#{1,6}\s+(?!フレーバー|特殊能力)/.test(x);
+ const read=(at,isFlavor)=>{
+  if(at<0)return '';
+  const out=[];
+  for(let i=at+1;i<lines.length;i++){
+   const line=lines[i].trim();
+   if((isFlavor&&ruleHead(line))||(!isFlavor&&flavorHead(line))||stopLine(line))break;
+   if(noise(line))continue;
+   if(/^https?:\/\//.test(line))break;
+   if(isFlavor)out.push(line.replace(/^\s*>\s*/,''));
+   else out.push(line.replace(/^\s*[-*+]\s+(?=\S)/,'■ '));
+  }
+  return cleanText(out.join('\n'));
+ };
+ const r=lines.findIndex(ruleHead);
+ const f=lines.findIndex(flavorHead);
+ return {rules:read(r,false),flavor:read(f,true)};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
 function splitOfficialSections(raw=''){return officialSections(raw);}
@@ -158,11 +164,24 @@ function markdownData(md,url){
  const collector=number||((title+' '+joined.slice(0,1500)).match(/(?:DM\d{2}[A-Z0-9-]*\s*)?(?:[0-9]{1,3}\/[0-9]{1,3}|S[0-9]+\/S[0-9]+)/i)||[])[0]||'';
  return {name,cost,number:collector,text:cleanCardRules(text),image,url};
 }
+const readerCache=new Map();
 async function fetchReader(url){
- const endpoint='https://r.jina.ai/'+url;
- const response=await fetch(endpoint,{method:'GET',mode:'cors',credentials:'omit',headers:{'Accept':'text/plain'}});
- if(!response.ok)throw Error('Reader HTTP '+response.status);
- return await response.text();
+ if(readerCache.has(url))return readerCache.get(url);
+ const job=(async()=>{
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),9500);
+  try{
+   const response=await fetch('https://r.jina.ai/'+url,{method:'GET',mode:'cors',credentials:'omit',headers:{'Accept':'text/plain'},signal:controller.signal});
+   if(!response.ok)throw Error('Reader HTTP '+response.status);
+   return await response.text();
+  }finally{clearTimeout(timeout);}
+ })();
+ readerCache.set(url,job);
+ try{
+  const result=await job;
+  if(readerCache.size>180)readerCache.delete(readerCache.keys().next().value);
+  return result;
+ }catch(e){readerCache.delete(url);throw e;}
 }
 
 function officialCardImage(url){
@@ -194,6 +213,18 @@ function extractOfficialMarkdown(md,url){
  if(!sections.flavor){
   const m=String(md).match(/(?:^|\n)\s*(?:#{1,6}\s*)?フレーバー(?:テキスト)?\s*\n(?:\s*[-─_]{3,}\s*\n)?([^\n]+)/);
   if(m&&m[1]&&!/^(?:\*|[-+])\s*DM/i.test(m[1].trim()))sections.flavor=cleanText(m[1]);
+ }
+ if(!sections.flavor){
+  const tail=String(md).split(/(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:\\*\\*)?フレーバー(?:テキスト)?(?:\\*\\*)?\\s*(?:\\n|$)/).slice(1)[0]||'';
+  if(tail){
+   const lines=tail.split('\\n').map(x=>x.trim()).filter(x=>x&&!/^[-_*─]{3,}$/.test(x));
+   const value=[];
+   for(const line of lines){
+    if(/^(?:[-*+]\\s*){1,5}(?:商品情報|このカードのよくある質問|同名カード)/.test(line)||/^#{1,6}\\s/.test(line)||/^(?:[-*+]\\s*)?DM\\d{2}[- ]/.test(line))break;
+    value.push(line);if(value.length>=6)break;
+   }
+   sections.flavor=cleanText(value.join('\\n'));
+  }
  }
  const number=collectorFromOfficial(md,url)||((heading.match(/\((DM[^)]+)\)/i)||[])[1]||'').replace(/^DM/i,'').replace(/\s+/, '  ');
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
@@ -336,33 +367,22 @@ const VERIFIED_CARDS=[
 async function searchOfficialCards(q,page=1){
  const payload={keyword:q,keyword_type:['card_name'],pagenum:String(page),samename:'show',sort:'release_new'};
  const official='https://dm.takaratomy.co.jp/card/?v='+encodeURIComponent(JSON.stringify(payload));
- // Alternative indexed search: the gateway can serve a cached default card
- // listing regardless of ?v=. Search-engine result pages have distinct URLs.
- const google='https://www.google.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&num=30&start='+((page-1)*30);
- const bing='https://www.bing.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&first='+((page-1)*20+1);
- const bundled=VERIFIED_CARDS.filter(x=>normalizeCardSearch(x.name).includes(normalizeCardSearch(q)));
- // For known cards, return verified official entries without relying on blocked search services.
- // Bundled known cards supplement live discovery, rather than replacing all search results.
- const sources=await Promise.allSettled([fetchReader(google),fetchReader(bing),fetchReader(official)]);
- const candidates=new Set();
- for(const result of sources)if(result.status==='fulfilled')for(const url of officialDetailLinks(result.value))candidates.add(url);
- // Never show arbitrary recent cards when a search engine or official search
- // returns an unrelated listing. Check the actual card detail page title.
- const all=[...candidates];const matches=page===1?[...bundled]:[];const seen=new Set(matches.map(x=>x.url));
- for(let i=0;i<all.length;i+=6){
-  const batch=await Promise.all(all.slice(i,i+6).map(async url=>{
-   try{
-    const detail=await fetchReader(url);
-    const card=extractOfficialMarkdown(detail,url);
-    const name=(card.name||'').trim();
-    if(!name||!normalizeCardSearch(name).includes(normalizeCardSearch(q)))return null;
-    return {name,number:card.number||collectorFromOfficial(detail,url)||'',url,image:officialCardImage(url)};
-   }catch{return null;}
-  }));
-  for(const item of batch.filter(Boolean)){if(!seen.has(item.url)){seen.add(item.url);matches.push(item);}}
-  if(matches.length>=24)break;
- }
- return matches.slice(0,12);
+ const google='https://www.google.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&num=60&start='+((page-1)*60);
+ const bing='https://www.bing.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&first='+((page-1)*50+1);
+ const bundled=page===1?VERIFIED_CARDS.filter(x=>normalizeCardSearch(x.name).includes(normalizeCardSearch(q))):[];
+ const results=await Promise.allSettled([fetchReader(official),fetchReader(google),fetchReader(bing)]);
+ const urls=new Set(bundled.map(x=>x.url));
+ for(const r of results)if(r.status==='fulfilled')for(const url of officialDetailLinks(r.value))urls.add(url);
+ const unknown=[...urls].filter(url=>!bundled.some(x=>x.url===url)).slice(0,36);
+ const found=await Promise.all(unknown.map(async url=>{
+  try{
+   const detail=await fetchReader(url);
+   const card=extractOfficialMarkdown(detail,url);
+   if(!card.name||!normalizeCardSearch(card.name).includes(normalizeCardSearch(q)))return null;
+   return {name:card.name,number:card.number||collectorFromOfficial(detail,url)||'',url,image:officialCardImage(url)};
+  }catch{return null;}
+ }));
+ return [...bundled,...found.filter(Boolean)].slice(0,24);
 }
 
 // Random discovery from official listing; present cards, not diagnostic metrics.
@@ -411,7 +431,7 @@ async function runOfficialSearch(q,page=1){
   officialSearchPage=page;officialSearchTerm=q;
   $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補（検索できた範囲）`:'一致するカードを取得できませんでした。外部検索サービスが利用できない可能性があります。公式URLが分かる場合は下のURL欄から登録できます。';
   const html=results.map((r,i)=>`<div class="official-result"><div class="official-result-main">${r.image?`<img class="official-result-thumb" src="${escapeAttr(r.image)}" alt="" loading="lazy">`:''}<div class="official-result-title"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.number||'コレクター番号不明')}</small></div></div><small class="official-result-url">${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('');
-  $('officialSearchResults').innerHTML=`<details class="search-collapse" open><summary>検索結果を表示・折りたたむ（${page}ページ・${results.length}件）</summary>${html}<nav class="search-pagination"><button class="action secondary" id="searchPrevious" ${page<=1?'disabled':''}>前</button><span>${page} ページ</span><button class="action primary" id="searchNext" ${results.length<12?'disabled':''}>次</button></nav></details>`;
+  $('officialSearchResults').innerHTML=`<details class="search-collapse" open><summary>検索結果を表示・折りたたむ（${page}ページ・${results.length}件）</summary>${html}<nav class="search-pagination"><button class="action secondary" id="searchPrevious" ${page<=1?'disabled':''}>前</button><span>${page} ページ</span><button class="action primary" id="searchNext" ${results.length===0?'disabled':''}>次</button></nav></details>`;
   $('searchPrevious').onclick=()=>runOfficialSearch(q,page-1);
   $('searchNext').onclick=()=>runOfficialSearch(q,page+1);
   document.querySelectorAll('[data-copy-search]').forEach(b=>b.onclick=async()=>{const r=results[+b.dataset.copySearch];try{await navigator.clipboard.writeText(r.url);b.textContent='コピーしました';}catch{$('sourceUrl').value=r.url;b.textContent='URL欄に入力しました';}});
