@@ -83,3 +83,21 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 .pack-image-placeholder{font-size:.8rem}
 
 .product-category{margin:12px 0 20px}.product-category h3{font-size:.9rem;color:#f3cd6a;margin:0 0 6px}.product-category .pack-grid{margin-top:8px}.text-block p,.detail-text p{white-space:pre-wrap;line-height:1.75}
+
+/* v2.31.19: restore multi-column horizontal product tiles */
+.pack-grid,.product-category .pack-grid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(160px,1fr))!important;gap:12px!important;align-items:stretch;width:100%;}
+.pack-item{min-width:0;width:auto;max-width:none;box-sizing:border-box;justify-content:flex-start;}
+.pack-item img,.pack-image-placeholder{width:100%;max-width:190px;aspect-ratio:223/350;object-fit:contain;}
+.pack-promo-placeholder{display:flex;align-items:center;justify-content:center;min-height:120px;max-height:220px;text-align:center;}
+@media(min-width:720px){.pack-grid,.product-category .pack-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;}}
+@media(max-width:440px){.pack-grid,.product-category .pack-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}}
+
+/* v2.31.19: restore multi-column horizontal product tiles */
+.pack-grid,.product-category .pack-grid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(160px,1fr))!important;gap:12px!important;align-items:stretch;width:100%;}
+.pack-item{min-width:0;width:auto;max-width:none;box-sizing:border-box;justify-content:flex-start;}
+.pack-item img,.pack-image-placeholder{width:100%;max-width:190px;aspect-ratio:223/350;object-fit:contain;}
+.pack-promo-placeholder{display:flex;align-items:center;justify-content:center;min-height:120px;max-height:220px;text-align:center;}
+@media(min-width:720px){.pack-grid,.product-category .pack-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;}}
+@media(max-width:440px){.pack-grid,.product-category .pack-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}}
+/* Category sections span the full outer grid, so their inner grids stay horizontal. */
+.pack-grid > .product-category{grid-column:1/-1;min-width:0;width:100%;}

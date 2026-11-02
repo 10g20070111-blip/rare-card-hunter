@@ -110,7 +110,7 @@ async function productImageFromOfficial(product){
  if(productImageCache.has(key))return productImageCache.get(key);
  const task=(async()=>{
   try{
-   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23116');
+   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23119');
    const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
    if(response.ok){const data=await response.json();if(data.image)return data.image;}
   }catch{}
@@ -120,8 +120,8 @@ async function productImageFromOfficial(product){
 async function enrichProducts(card){
  const products=Array.isArray(card.products)?card.products:[];
  if(!products.length)return card;
- const unique=[...new Map(products.filter(p=>p?.url).map(p=>[p.url.split('#')[0],p])).values()].slice(0,12);
- return {...card,products:await Promise.all(unique.map(async p=>({...p,image:(p.legacyFallback||isPromotion(card.number,p))?'':(p.image||await productImageFromOfficial(p))})))};
+ const unique=[...new Map(products.filter(p=>p?.name).map(p=>[(p.url||p.name).split('#')[0],p])).values()].slice(0,30);
+ return {...card,products:await Promise.all(unique.map(async p=>({...p,image:(!p.url||p.legacyFallback||isPromotion(card.number,p))?'':(p.image||await productImageFromOfficial(p))})))};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
 function splitOfficialSections(raw=''){return officialSections(raw);}
@@ -434,7 +434,7 @@ $('fetchPage').onclick=async()=>{
 
   if(isOfficial){const exactImage=officialCardImage(url.href);if(exactImage)parsed.image=exactImage;}
   if(!parsed.name&&!parsed.text&&!parsed.image&&!parsed.cost&&!parsed.number)throw Error('ページからカード情報を抽出できませんでした');
-  draft={...parsed,text:normalizeRules(parsed.text),flavor:isOfficial?(parsed.flavor||''):(parsed.flavor||extractFlavor(body)),url:url.href};renderPreview();if(isOfficial&&draft.products?.length){enrichProducts(draft).then(updated=>{if(draft?.url===updated.url){draft.products=updated.products;renderProductInfo('previewProducts',draft.products,draft.number)}}).catch(()=>{});}requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
+  draft={...parsed,text:normalizeRules(parsed.text),flavor:isOfficial?(parsed.flavor||''):(parsed.flavor||extractFlavor(body)),url:url.href};renderPreview();if(isOfficial&&draft.products?.length){enrichProducts(draft).then(updated=>{if(draft?.url===updated.url){draft.products=updated.products;renderProductInfo('previewProducts',draft.products,draft.number,draft.url)}}).catch(()=>{});}requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
   const missing=[];if(!draft.name)missing.push('カード名');if(!draft.cost)missing.push('コスト');if(!draft.number)missing.push('コレクター番号');if(!draft.text)missing.push('テキスト');if(!draft.image)missing.push('画像');
   $('fetchStatus').textContent=missing.length?'一部の情報を取得できませんでした（'+missing.join('・')+'）。「編集する」から補完できます。':'カード情報を取得しました。内容を確認してください。';
  }catch(e){$('fetchStatus').textContent='自動取得に失敗しました。通信制限、外部読み取りサービスの応答、またはページ形式が原因の可能性があります。時間をおいて再試行するか、「編集する」から入力してください。';}
@@ -458,6 +458,8 @@ function normalizeProductCode(value=''){
  if(m)return 'DM'+m[1]+m[2]+String(Number(m[3]));
  m=v.match(/DM\s*[- ]?\s*(RP|EX|SD|BD|SP|ART|X|D|P)\s*[- ]?\s*(\d{1,4})/);
  if(m)return 'DM'+m[1]+String(Number(m[2]));
+ m=v.match(/DMART\s*[- ]?\s*(\d{1,3})/);if(m)return 'DMART'+Number(m[1]);
+ m=v.match(/DMART\s*[- ]?\s*(\d{1,3})/);if(m)return 'DMART'+Number(m[1]);
  // Original DM-01 to DM-39 and later legacy sets.
  m=v.match(/DM\s*[- ]?\s*(\d{1,2})(?!\d|[A-Z])/);
  if(m)return 'DM'+String(Number(m[1]));
@@ -482,29 +484,33 @@ function productCategory(product={}){
 function isPromotion(number='',product={}){return productCategory(product)==='promo';}
 function versionMatchesProduct(number='',product={}){
  const c=codeFromCollector(number),p=codeFromProduct(product);
- if(c&&p)return c===p;
- if(productCategory(product)==='promo'&&isPromoVersion(number))return true;
- return false;
+ return !!(c&&p&&c===p);
 }
-function renderProductInfo(target,products,collectorNumber=''){
+function renderProductInfo(target,products,collectorNumber='',cardUrl=''){
  const el=$(target);if(!el)return;
- if(!products?.length){el.innerHTML='<p class="hint">収録商品情報は取得できませんでした。</p>';return;}
+ const data=Array.isArray(products)?products.filter(p=>p&&p.name):[];
+ const source=cardUrl||data.find(p=>p.url)?.url||'';
  const groups={pack:[],art:[],promo:[]};
- // A promotional print may be reprinted in ordinary sets under the same name.
- // Show the promotion as a separate entry; do not mislabel the ordinary packs.
- if(isPromoVersion(collectorNumber)&&!products.some(p=>productCategory(p)==='promo')){
-  const source=products.find(p=>p.url)?.url||'';
-  if(source)groups.promo.push(`<a class="pack-item pack-item-matched" href="${escapeAttr(source)}" target="_blank" rel="noopener noreferrer"><strong class="pack-match-label">このバージョンの収録情報</strong><div class="pack-image-placeholder">プロモーションカード</div><span>プロモーション版（${escapeHtml(collectorNumber)}）・公式カード詳細で確認</span></a>`);
+ const code=codeFromCollector(collectorNumber),promo=isPromoVersion(collectorNumber);
+ const hasExact=data.some(p=>versionMatchesProduct(collectorNumber,p));
+ function tile(p,cat,match=false){
+  const url=/^https:\/\/dm\.takaratomy\.co\.jp\//.test(p.url||'')?p.url:'';
+  const tag=url?'a':'div';const attrs=url?` href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"`:'';
+  const picture=cat==='promo'?'<div class="pack-image-placeholder pack-promo-placeholder">プロモーションカード</div>':p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async">`:`<div class="pack-image-placeholder">${cat==='art'?'神アート':p.legacyFallback?'旧商品・画像未登録':'商品画像なし'}</div>`;
+  return `<${tag} class="pack-item${match?' pack-item-matched':''}"${attrs}>${match?'<strong class="pack-match-label">このバージョンの収録商品</strong>':''}${picture}<span>${escapeHtml(p.name)}</span></${tag}>`;
  }
- for(const p of products){
-  const cat=productCategory(p),match=versionMatchesProduct(collectorNumber,p);
-  const placeholder=cat==='promo'?'プロモーションカード':p.legacyFallback?'旧商品・画像未登録':'公式商品ページ';
-  const picture=p.image&&cat!=='promo'?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'公式商品ページ'}))">`:`<div class="pack-image-placeholder">${placeholder}</div>`;
-  groups[cat].push(`<a class="pack-item${match?' pack-item-matched':''}" href="${escapeAttr(p.url)}" target="_blank" rel="noopener noreferrer">${match?'<strong class="pack-match-label">このバージョンの収録商品</strong>':''}${picture}<span>${escapeHtml(p.name)}</span></a>`);
+ for(const p of data){const cat=productCategory(p);groups[cat].push(tile(p,cat,versionMatchesProduct(collectorNumber,p)));}
+ if(!hasExact&&code){
+  const cat=/DMART/.test(code)?'art':'pack';
+  groups[cat].unshift(tile({name:`${code}（番号から判定・正式商品名未確認）`,url:source,legacyFallback:true},cat,true));
  }
- el.innerHTML=[['pack','収録商品'],['art','神アート'],['promo','プロモーション']].filter(([key])=>groups[key].length).map(([key,title])=>`<section class="product-category"><h3>${title}</h3><div class="pack-grid">${groups[key].join('')}</div></section>`).join('');
+ if(promo&&!data.some(p=>productCategory(p)==='promo')){
+  groups.promo.unshift(tile({name:`プロモーション版（${collectorNumber||'番号不明'}）・配布元未確認`,url:source},'promo',true));
+ }
+ if(!data.length&&!code&&!promo){el.innerHTML='<p class="hint">公式ページから収録商品を確認できませんでした。</p>';return;}
+ el.innerHTML=[['pack','収録商品・拡張パック'],['art','神アート'],['promo','プロモーション']].filter(([key])=>groups[key].length).map(([key,title])=>`<section class="product-category"><h3>${title}</h3><div class="pack-grid">${groups[key].join('')}</div></section>`).join('');
 }
-function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').innerHTML=escapeHtml(displayNameWithoutNumber(draft.name,draft.number)||'カード名を取得できません')+(draft.number?' <small class="name-number">('+escapeHtml(draft.number)+')</small>':'');$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=decorateAbilitySymbols(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';renderProductInfo('previewProducts',draft.products,draft.number);$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power||'—'],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
+function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').innerHTML=escapeHtml(displayNameWithoutNumber(draft.name,draft.number)||'カード名を取得できません')+(draft.number?' <small class="name-number">('+escapeHtml(draft.number)+')</small>':'');$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=decorateAbilitySymbols(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';renderProductInfo('previewProducts',draft.products,draft.number,draft.url);$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power||'—'],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
 function escapeAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 $('editPreview').onclick=()=>{$('editPanel').hidden=false;$('previewPanel').hidden=true;$('editName').value=draft.name;$('editCost').value=draft.cost;$('editNumber').value=draft.number;$('editType').value=draft.type||'';$('editCivilization').value=draft.civilization||'';$('editRarity').value=draft.rarity||'';$('editPower').value=draft.power||'';$('editRace').value=draft.race||'';$('editText').value=draft.text;$('editFlavor').value=draft.flavor||'';$('editImageUrl').value=draft.image;$('editImagePreview').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}">`:''};$('backToPreview').onclick=renderPreview;
 $('editImageFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;editedImage=await imageData(f);$('editImagePreview').innerHTML=`<img src="${editedImage}">`};$('applyEdit').onclick=()=>{draft.name=$('editName').value.trim();draft.cost=$('editCost').value.trim();draft.number=$('editNumber').value.trim();draft.type=$('editType').value.trim();draft.civilization=$('editCivilization').value.trim();draft.rarity=$('editRarity').value.trim();draft.power=$('editPower').value.trim();draft.race=$('editRace').value.trim();draft.text=normalizeRules($('editText').value);draft.flavor=$('editFlavor').value.trim();draft.image=$('editImageUrl').value.trim();if(editedImage)draft.image=editedImage;renderPreview()};
@@ -556,7 +562,7 @@ $('tabRegistered').onclick=()=>{activeCollectionTab='registered';paintCollection
 $('backToCollection').onclick=()=>{selectedCardId=null;paintCollection()};
 function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;selectedCardId=id;$('collectionItems').hidden=true;$('cardDetail').hidden=false;
  const rows=[['コスト',c.cost],['コレクター番号',c.number],['カードタイプ',c.type],['文明',c.civilization],['レアリティ',c.rarity],['パワー',c.power||'—'],['種族',c.race]];
- $('detailContent').innerHTML=`<h2>${escapeHtml(displayNameWithoutNumber(c.name,c.number))}${c.number?` <small class="name-number">(${escapeHtml(c.number)})</small>`:''}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(decorateAbilitySymbols(c.text)||'—')}</p></section>${c.flavor?`<section class="detail-text"><b>フレーバー</b><p>${escapeHtml(c.flavor)}</p></section>`:''}<section class="detail-text"><b>商品情報</b><div id="detailProducts" class="pack-grid"></div></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;renderProductInfo('detailProducts',c.products,c.number);
+ $('detailContent').innerHTML=`<h2>${escapeHtml(displayNameWithoutNumber(c.name,c.number))}${c.number?` <small class="name-number">(${escapeHtml(c.number)})</small>`:''}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(decorateAbilitySymbols(c.text)||'—')}</p></section>${c.flavor?`<section class="detail-text"><b>フレーバー</b><p>${escapeHtml(c.flavor)}</p></section>`:''}<section class="detail-text"><b>商品情報</b><div id="detailProducts" class="pack-grid"></div></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;renderProductInfo('detailProducts',c.products,c.number,c.url);
  $('toggleWanted').textContent=c.wanted?'購入予定から外す':'購入予定に追加';$('deleteCard').onclick=async()=>{if(!confirm('このカードを登録一覧から削除しますか？購入予定からも削除されます。'))return;await req(st('cards','readwrite').delete(c.id));selectedCardId=null;await load();paintCollection()};
 }
 $('toggleWanted').onclick=async()=>{const c=cards.find(x=>x.id===selectedCardId);if(!c)return;c.wanted=!c.wanted;await saveCard(c);openCardDetail(c.id);$('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(x=>x.wanted).length;};
