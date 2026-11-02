@@ -81,27 +81,30 @@ function officialProductLinks(raw=''){
  }
  return products;
 }
+// Resolve a product's main image through the official Worker; keep reader as fallback.
 const productImageCache=new Map();
 async function productImageFromOfficial(product){
- if(productImageCache.has(product.url))return productImageCache.get(product.url);
+ const key=product.url;
+ if(productImageCache.has(key))return productImageCache.get(key);
  const task=(async()=>{
   try{
-   const text=await fetchReader(product.url);
-   // Product pages show the main product picture immediately before the product title.
-   const heading=text.search(/(?:^|\n)\s*#{1,3}\s*(?:デュエル・マスターズTCG|商品内容)/m);
-   const segment=heading>=0?text.slice(Math.max(0,heading-2800),heading):text.slice(0,9000);
-   const imgs=[...segment.matchAll(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+\.(?:png|jpe?g|webp)(?:\?[^)]*)?)\)/gi)];
-   const good=imgs.filter(m=>/dm\.takaratomy\.co\.jp/.test(m[2])&&!/logo|icon|bnr|banner|menu|header|footer|sns|twitter|btn/i.test(m[2]));
-   // Do not fabricate a pack image if the reader doesn't expose an official image URL.
-   return (good.find(m=>/DM(?:\d{2}|EX|RP|BD)/i.test(m[1]))||good.at(-1))?.[2]||'';
+   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);
+   const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
+   if(response.ok){const data=await response.json();if(data.image)return data.image;}
+  }catch{}
+  try{
+   const md=await fetchReader(product.url);
+   const candidates=[...md.matchAll(/!\[[^\]]*\]\((https?:\/\/[^)\s]+\.(?:png|jpe?g|webp)(?:\?[^)]*)?)\)/gi)]
+    .map(m=>m[1]).filter(u=>/dm\.takaratomy\.co\.jp/i.test(u)&&!/logo|icon|banner|menu|header|footer|sns|twitter|btn|cardimage/i.test(u));
+   return candidates[0]||'';
   }catch{return ''}
- })();productImageCache.set(product.url,task);return task;
+ })();productImageCache.set(key,task);return task;
 }
 async function enrichProducts(card){
  const products=Array.isArray(card.products)?card.products:[];
  if(!products.length)return card;
- const enriched=await Promise.all(products.slice(0,12).map(async product=>({...product,image:product.image||await productImageFromOfficial(product)})));
- return {...card,products:enriched};
+ const unique=[...new Map(products.filter(p=>p?.url).map(p=>[p.url.split('#')[0],p])).values()].slice(0,12);
+ return {...card,products:await Promise.all(unique.map(async p=>({...p,image:p.image||await productImageFromOfficial(p)})))};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
 function splitOfficialSections(raw=''){return officialSections(raw);}
@@ -252,7 +255,7 @@ function extractOfficialMarkdown(md,url){
   if(m){const rules=m[1].split('\n').filter(x=>x.trim()&&!/^[-_*─]{3,}$/.test(x.trim())).join('\n');sections={...sections,rules};}
  }
 
- const number=collectorFromOfficial(md,url)||((heading.match(/\((DM[^)]+)\)/i)||[])[1]||'').replace(/^DM/i,'').replace(/\s+/, '  ');
+ const number=collectorFromOfficial(md,url)||((heading.match(/[（(]\s*(DM[^)）]+)[)）]/i)||[])[1]||'').trim();
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
  text:normalizeRules(sections.rules),flavor:sections.flavor||'',products:officialProductLinks(md),
  image:officialCardImage(url),url,type:get('カードの種類'),civilization:get('文明'),
@@ -334,9 +337,15 @@ $('fetchPage').onclick=async()=>{
   if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}}
   else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
   if(isOfficial&&officialExtra){if(officialExtra.flavor)parsed.flavor=officialExtra.flavor;if(officialExtra.products.length)parsed.products=officialExtra.products;}
+  if(isOfficial){
+   // Some official titles carry a set/serial identifier not recognized by the older parser.
+   const titleNumber=(String(body).match(/(?:^|\n)\s*(?:Title:|#{1,4}\s*)?[^\n]{1,120}?[（(]\s*(DM[A-Z0-9-]+\s+[^)（）]{1,35})\s*[)）]/i)||[])[1]||'';
+   if(!parsed.number&&titleNumber)parsed.number=titleNumber.trim();
+  }
+
   if(isOfficial){const exactImage=officialCardImage(url.href);if(exactImage)parsed.image=exactImage;}
   if(!parsed.name&&!parsed.text&&!parsed.image&&!parsed.cost&&!parsed.number)throw Error('ページからカード情報を抽出できませんでした');
-  draft={...parsed,text:normalizeRules(parsed.text),flavor:isOfficial?(parsed.flavor||''):(parsed.flavor||extractFlavor(body)),url:url.href};renderPreview();if(isOfficial&&draft.products?.length){/* Official product links are available immediately; images are optional. */}requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
+  draft={...parsed,text:normalizeRules(parsed.text),flavor:isOfficial?(parsed.flavor||''):(parsed.flavor||extractFlavor(body)),url:url.href};renderPreview();if(isOfficial&&draft.products?.length){enrichProducts(draft).then(updated=>{if(draft?.url===updated.url){draft.products=updated.products;renderProductInfo('previewProducts',draft.products)}}).catch(()=>{});}requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
   const missing=[];if(!draft.name)missing.push('カード名');if(!draft.cost)missing.push('コスト');if(!draft.number)missing.push('コレクター番号');if(!draft.text)missing.push('テキスト');if(!draft.image)missing.push('画像');
   $('fetchStatus').textContent=missing.length?'一部の情報を取得できませんでした（'+missing.join('・')+'）。「編集する」から補完できます。':'カード情報を取得しました。内容を確認してください。';
  }catch(e){$('fetchStatus').textContent='自動取得に失敗しました。通信制限、外部読み取りサービスの応答、またはページ形式が原因の可能性があります。時間をおいて再試行するか、「編集する」から入力してください。';}
@@ -347,7 +356,7 @@ function raceMarkup(value=''){return escapeHtml(value).replace(/\s*\/\s*/g,'<wbr
 function renderProductInfo(target,products){
  const el=$(target);if(!el)return;
  if(!products?.length){el.innerHTML='<p class="hint">収録商品情報は取得できませんでした。</p>';return;}
- el.innerHTML=products.map(p=>`<a class="pack-item" href="${escapeAttr(p.url)}" target="_blank" rel="noopener noreferrer">${p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" onerror="this.hidden=true">`:'<div class="pack-image-placeholder">公式商品ページ</div>'}<span>${escapeHtml(p.name)}</span></a>`).join('');
+ el.innerHTML=products.map(p=>`<a class="pack-item" href="${escapeAttr(p.url)}" target="_blank" rel="noopener noreferrer">${p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'公式商品ページ'}))">`:'<div class="pack-image-placeholder">公式商品ページ</div>'}<span>${escapeHtml(p.name)}</span></a>`).join('');
 }
 function renderPreview(){$('urlEntry').hidden=true;$('previewPanel').hidden=false;$('editPanel').hidden=true;$('previewName').innerHTML=escapeHtml(draft.name||'カード名を取得できません')+(draft.number?' <small class="name-number">('+escapeHtml(draft.number)+')</small>':'');$('previewCost').textContent=draft.cost||'—';$('previewNumber').textContent=draft.number||'—';$('previewText').textContent=normalizeRules(draft.text)||'—';$('previewFlavor').textContent=draft.flavor||'—';renderProductInfo('previewProducts',draft.products);$('previewImage').innerHTML=draft.image?`<img src="${escapeAttr(draft.image)}" alt="カード画像" onerror="this.parentElement.textContent='画像を表示できません'">`:'画像なし';const extras=[['カードタイプ',draft.type],['文明',draft.civilization],['レアリティ',draft.rarity],['パワー',draft.power],['種族',draft.race]].filter(x=>x[1]);$('previewExtra').innerHTML=extras.map(([k,v])=>`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`).join('');$('sourceNotice').textContent='取得元：'+draft.url}
 function escapeAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}

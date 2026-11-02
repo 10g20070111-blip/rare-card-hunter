@@ -51,6 +51,24 @@ export default {async fetch(request){
  if(request.method==='OPTIONS')return new Response(null,{headers:HEADERS});
  if(request.method!=='GET')return reply({error:'GET only'},405);
  const u=new URL(request.url);
+ const productUrl=u.searchParams.get('product');
+ if(productUrl!==null){
+  let target;
+  try{target=new URL(productUrl)}catch{return reply({error:'Invalid product URL'},400)}
+  if(target.protocol!=='https:'||target.hostname!=='dm.takaratomy.co.jp'||!target.pathname.startsWith('/product/'))return reply({error:'Product must be an official product page'},400);
+  try{
+   const d=await fetchHtml(target.href);
+   if(d.status!==200)return reply({error:'Official product HTTP '+d.status},502);
+   const html=d.html;
+   const metas=[...html.matchAll(/<meta\b[^>]*>/gi)].map(m=>m[0]);
+   const metaImage=metas.filter(tag=>/og:image|twitter:image/i.test(attr(tag,'property')+' '+attr(tag,'name'))).map(tag=>attr(tag,'content'));
+   const imgTags=[...html.matchAll(/<img\b[^>]*>/gi)].map(m=>m[0]);
+   const candidates=[...metaImage,...imgTags.flatMap(tag=>[attr(tag,'data-src'),attr(tag,'src'),attr(tag,'data-original')])];
+   const urls=candidates.map(src=>{try{return new URL(src,d.url).href}catch{return ''}}).filter(src=>src.startsWith('https://')&&!/logo|icon|banner|bnr|menu|header|footer|sns|twitter|btn|cardimage|noimage/i.test(src));
+   const image=urls.find(src=>/product|item|package|main|thumb|pack/i.test(src))||urls[0]||'';
+   return reply({image,source:'official-product',url:d.url});
+  }catch(e){return reply({error:'Product image lookup failed: '+String(e.message||e)},502)}
+ }
  const detailId=u.searchParams.get('detail');
  if(detailId!==null){
   if(!/^[a-z0-9-]{1,100}$/i.test(detailId))return reply({error:'Invalid card id'},400);
@@ -76,7 +94,7 @@ export default {async fetch(request){
   if(debug){
    const title=plain((d.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]||'');
    const keywordInput=(d.html.match(/<input\b[^>]*name\s*=\s*["']keyword["'][^>]*>/i)||[])[0]||'';
-   out.debug={version:'2.31.6',requestedKeyword:q,upstreamUrl:upstream,requestMethod:method,requestBody:searchBody(q,page),finalUrl:d.url,upstreamStatus:d.status,htmlLength:d.html.length,htmlContainsKeyword:d.html.includes(q),pageTitle:title,keywordInput:keywordInput.slice(0,350),cardBlocks:(d.html.match(/class\s*=\s*["'][^"']*cardImage/gi)||[]).length,foundCards:cards.length,officialTotal:count,firstIds:cards.slice(0,5).map(c=>c.id),firstListNames:cards.slice(0,5).map(c=>c.name),detailChecks:resolved.slice(0,3).map(c=>({id:c.id,name:c.name,status:c._status||null,error:c._error||null,title:c._title||null})),matchedCards:results.length};
+   out.debug={version:'2.31.8',requestedKeyword:q,upstreamUrl:upstream,requestMethod:method,requestBody:searchBody(q,page),finalUrl:d.url,upstreamStatus:d.status,htmlLength:d.html.length,htmlContainsKeyword:d.html.includes(q),pageTitle:title,keywordInput:keywordInput.slice(0,350),cardBlocks:(d.html.match(/class\s*=\s*["'][^"']*cardImage/gi)||[]).length,foundCards:cards.length,officialTotal:count,firstIds:cards.slice(0,5).map(c=>c.id),firstListNames:cards.slice(0,5).map(c=>c.name),detailChecks:resolved.slice(0,3).map(c=>({id:c.id,name:c.name,status:c._status||null,error:c._error||null,title:c._title||null})),matchedCards:results.length};
   }
   return reply(out);
  }catch(e){return reply({results:[],hasNext:false,error:'公式検索へのアクセスに失敗しました: '+String(e.message||e)},502)}
