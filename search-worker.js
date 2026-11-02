@@ -1,48 +1,83 @@
-// RARE CARD HUNTER 2.31 — live official search, no bundled card catalog.
-const ORIGIN='https://dm.takaratomy.co.jp';
-const CORS={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'public, max-age=120'};
-const json=(obj,status=200)=>Response.json(obj,{status,headers:CORS});
-const decode=s=>String(s||'').replace(/&#(x[\da-f]+|\d+);|&(amp|quot|apos|lt|gt|nbsp|#39);/gi,(a,num,named)=>num?String.fromCodePoint(parseInt(num[0].toLowerCase()==='x'?num.slice(1):num,num[0].toLowerCase()==='x'?16:10)):({'amp':'&','quot':'"','apos':"'",'lt':'<','gt':'>','nbsp':' ','#39':"'"}[named.toLowerCase()]||a));
-const strip=s=>decode(String(s||'').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ')).trim();
-const norm=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[\s　・･「」『』（）()【】!！?？]/g,'');
-const getId=s=>{const t=decode(s);return (t.match(/(?:\/card\/)?detail\/?\?[^\s"'<>]*?\bid=([a-z\d_-]+)/i)||t.match(/cardimage\/([a-z\d_-]+)\.(?:jpg|png|webp)/i)||[])[1]||''};
-function extract(html,q){
- const found=new Map();
- // Official cards can use absolute/relative href, data-href, JS window.open,
- // or image URLs. Locate IDs independently of HTML attribute order.
- const re=/(?:\/card\/detail\/|\bdetail\/?)\?[^\s"'<>]{0,200}?\bid=[a-z\d_-]+|(?:\/cardimage\/)[a-z\d_-]+\.(?:jpg|png|webp)/gi;
- let m;
- while((m=re.exec(html))&&found.size<250){
-  const id=getId(m[0]);if(!id||found.has(id.toLowerCase()))continue;
-  const before=html.slice(Math.max(0,m.index-1600),m.index),after=html.slice(m.index,Math.min(html.length,m.index+1800));
-  const nearby=before+after;
-  const imgTags=[...nearby.matchAll(/<img\b[^>]*>/gi)].map(x=>x[0]);
-  const candidates=[];
-  for(const tag of imgTags){const alt=tag.match(/\b(?:alt|title)\s*=\s*["']([^"']+)["']/i)?.[1];if(alt)candidates.push(strip(alt));}
-  for(const x of nearby.matchAll(/(?:data-card-name|data-name|title|alt)\s*=\s*["']([^"']+)["']/gi))candidates.push(strip(x[1]));
-  for(const x of nearby.matchAll(/<(?:h[2-6]|p|span|div)\b[^>]*class\s*=\s*["'][^"']*(?:card[_-]?name|card[_-]?title|name)[^"']*["'][^>]*>([\s\S]{0,250}?)<\//gi))candidates.push(strip(x[1]));
-  // A card image's alt can be missing; use visible text adjacent to link.
-  for(const x of after.slice(0,550).matchAll(/>([^<>]{2,90})</g))candidates.push(strip(x[1]));
-  const name=candidates.find(x=>x.length>=2&&x.length<130&&norm(x).includes(norm(q)))||'';
-  if(!name)continue;
-  found.set(id.toLowerCase(),{name,number:'',url:ORIGIN+'/card/detail/?id='+encodeURIComponent(id),image:ORIGIN+'/wp-content/card/cardimage/'+encodeURIComponent(id)+'.jpg'});
+// RARE CARD HUNTER — Cloudflare Worker v2.31.7
+// Live official search with bounded requests and useful diagnostics.
+const ORIGIN = 'https://dm.takaratomy.co.jp';
+const HEADERS = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Methods':'GET, OPTIONS','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
+const reply = (data,status=200) => Response.json(data,{status,headers:HEADERS});
+const decode = s => String(s||'').replace(/&#(x[0-9a-f]+|\d+);|&(amp|quot|apos|lt|gt|nbsp);/gi,(all,num,named)=>num?String.fromCodePoint(parseInt(num[0].toLowerCase()==='x'?num.slice(1):num,num[0].toLowerCase()==='x'?16:10)):({amp:'&',quot:'"',apos:"'",lt:'<',gt:'>',nbsp:' '}[named.toLowerCase()]||all));
+const plain = s => decode(String(s||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ')).trim();
+const norm = s => String(s||'').normalize('NFKC').toLowerCase().replace(/[\s　・･「」『』（）()【】!！?？]/g,'');
+const attr = (tag,key) => decode((tag.match(new RegExp('(?:^|\\s)'+key+'\\s*=\\s*["\\x27]([^"\\x27]*)["\\x27]','i'))||[])[1]||'');
+const idFrom = s => (String(s||'').match(/[?&]id=([\w-]+)/i)||[])[1]||'';
+const urlFor = id => ORIGIN+'/card/detail/?id='+encodeURIComponent(id);
+const searchUrl = (q,page) => ORIGIN+'/card/?v='+encodeURIComponent(JSON.stringify({suggest:'on',keyword:q,keyword_type:['card_name','card_ruby','card_text'],culture_cond:['単色','多色'],pagenum:String(page),samename:'show',sort:'release_new'}));
+async function fetchHtml(url,options={}){const r=await fetch(url,{...options,headers:{Accept:'text/html,application/xhtml+xml',...(options.headers||{})},redirect:'follow',cf:{cacheTtl:0}});return {status:r.status,url:r.url,html:await r.text()};}
+function searchBody(q,page){const p=new URLSearchParams();p.append('suggest','on');p.append('keyword',q);for(const t of ['card_name','card_ruby','card_text'])p.append('keyword_type[]',t);for(const c of ['単色','多色'])p.append('culture_cond[]',c);p.append('pagenum',String(page));p.append('samename','show');p.append('sort','release_new');return p.toString();}
+async function searchOfficial(q,page){return fetchHtml(ORIGIN+'/card/',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8','Origin':ORIGIN,'Referer':ORIGIN+'/card/','X-Requested-With':'XMLHttpRequest'},body:searchBody(q,page)});}
+
+function collect(html){
+ const cards=new Map();
+ // The official response uses <li><a data-href="/card/detail/?id=...">...</a></li>.
+ const list=(html.match(/<div\b[^>]*id\s*=\s*["']cardlist["'][^>]*>([\s\S]*?)<div\b[^>]*class\s*=\s*["'][^"']*pagerList01/i)||[])[1]||html;
+ for(const match of list.matchAll(/<li\b[^>]*>[\s\S]*?<\/li>/gi)){
+  const block=match[0];
+  const link=(block.match(/<a\b[^>]*>/i)||[])[0]||'';
+  const id=idFrom(attr(link,'data-href')||attr(link,'href'));
+  if(!id||cards.has(id.toLowerCase()))continue;
+  const img=(block.match(/<img\b[^>]*>/i)||[])[0]||'';
+  const imagePath=attr(img,'src')||attr(img,'data-src');
+  const alt=attr(img,'alt').trim();
+  cards.set(id.toLowerCase(),{id,name:alt&&alt!==' '?alt:'',number:'',url:urlFor(id),image:imagePath?new URL(imagePath,ORIGIN).href:''});
  }
- return [...found.values()];
+ return [...cards.values()];
 }
-function searchUrl(q,page){const payload={suggest:'on',keyword:q,keyword_type:['card_name','card_ruby','card_text'],culture_cond:['単色','多色'],pagenum:String(page),samename:'show',sort:'release_new'};return ORIGIN+'/card/?v='+encodeURIComponent(JSON.stringify(payload));}
-async function official(url){const ctrl=new AbortController();const timeout=setTimeout(()=>ctrl.abort(),12000);try{const res=await fetch(url,{headers:{Accept:'text/html,application/xhtml+xml','User-Agent':'Mozilla/5.0'},signal:ctrl.signal,redirect:'follow'});if(!res.ok)throw Error('公式サイト HTTP '+res.status);return await res.text()}finally{clearTimeout(timeout)}}
+function totalCount(html){const m=html.match(/id\s*=\s*["']total_count["'][^>]*>\s*(\d+)/i);return m?Number(m[1]):null;}
+function detailTitle(html){
+ // The first h1/h2 on this website can be a site heading; the <title> is card-specific.
+ const title=plain((html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)||[])[1]||'').replace(/\s*[|｜]\s*デュエル[\s\S]*$/,'').trim();
+ const heading=plain((html.match(/<h[1-4]\b[^>]*>([\s\S]*?)<\/h[1-4]>/i)||[])[1]||'');
+ const chosen=/\b(?:DM|DMP|DMRP|DMEX|BD)\d/i.test(title)?title:(title||heading);
+ const m=chosen.match(/^(.+?)\s*[（(]([^()（）]*)[)）]/);
+ return {name:m?m[1].trim():chosen,number:m?m[2].trim():''};
+}
+async function enrich(card){
+ try{const d=await fetchHtml(card.url);if(d.status!==200)return {...card,_status:d.status};
+  const info=detailTitle(d.html);
+  const img=(d.html.match(/<img\b[^>]*(?:cardimage|cardthumb)[^>]*>/i)||[])[0]||'';
+  const src=attr(img,'data-src')||attr(img,'src');
+  return {...card,name:info.name||card.name,number:info.number||card.number,image:card.image||(src?new URL(src,ORIGIN).href:''),_status:d.status,_title:plain((d.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]||'')};
+ }catch(e){return {...card,_error:String(e.message||e)}}
+}
 export default {async fetch(request){
- if(request.method==='OPTIONS')return new Response(null,{headers:CORS});
- if(request.method!=='GET')return json({error:'GET only'},405);
- const u=new URL(request.url),q=(u.searchParams.get('q')||'').trim(),page=Math.max(1,Math.min(9999,Number(u.searchParams.get('page'))||1));
- if(q.length<2)return json({results:[],hasNext:false,error:'カード名を2文字以上入力してください。'});
+ if(request.method==='OPTIONS')return new Response(null,{headers:HEADERS});
+ if(request.method!=='GET')return reply({error:'GET only'},405);
+ const u=new URL(request.url);
+ const detailId=u.searchParams.get('detail');
+ if(detailId!==null){
+  if(!/^[a-z0-9-]{1,100}$/i.test(detailId))return reply({error:'Invalid card id'},400);
+  try{const d=await fetchHtml(urlFor(detailId));if(d.status!==200)return reply({error:'Official detail HTTP '+d.status},502);return reply({html:d.html,source:'official-detail'});}
+  catch(e){return reply({error:'Official detail fetch failed: '+String(e.message||e)},502);}
+ }
+ const q=(u.searchParams.get('q')||'').trim(),page=Math.max(1,Math.min(9999,Number(u.searchParams.get('page'))||1)),debug=u.searchParams.get('debug')==='1';
+ if(q.length<2)return reply({results:[],hasNext:false,error:'カード名を2文字以上入力してください。'});
  try{
-  const html=await official(searchUrl(q,page));const results=extract(html,q);
-  // Never mistake a successful HTML response for a successful card extraction.
-  const pageCount=(html.match(/(?:\/card\/detail\/|\bdetail\/?)\?[^\s"'<>]{0,200}?\bid=[a-z\d_-]+/gi)||[]).length;
-  const hasNext=results.length>0&&(new RegExp('(?:pagenum|page)[^<>]{0,100}(?:'+(page+1)+')|次のページ|next page','i').test(html));
-  const out={results,hasNext,page,source:'official-live',warning:!results.length?'公式ページは取得できましたが、カード情報を抽出できませんでした。':undefined};
-  if(u.searchParams.get('debug')==='1')out.debug={htmlLength:html.length,detailLinks:pageCount,cardImages:(html.match(/cardimage\//gi)||[]).length,hasCardTitle:html.includes('カード検索'),sample:html.slice(Math.max(0,html.search(/cardimage\/|\/card\/detail\/|detail\/?\?id=/i)-300),Math.max(0,html.search(/cardimage\/|\/card\/detail\/|detail\/?\?id=/i)-300)+1100)};
-  return json(out);
- }catch(e){return json({results:[],hasNext:false,error:'公式検索へのアクセスに失敗しました: '+String(e.message||e)},502)}
+  // Chrome DevTools confirms the official search submits POST form data.
+  // A GET ?v= page may return the unfiltered latest 50 cards; never accept it as search results.
+  const upstream=ORIGIN+'/card/';
+  const method='POST';
+  const d=await searchOfficial(q,page);
+  if(d.status!==200)return reply({results:[],hasNext:false,error:'公式サイトがHTTP '+d.status+'を返しました。',debug:debug?{requestMethod:method,upstream,finalUrl:d.url}:undefined},502);
+  const cards=collect(d.html),count=totalCount(d.html);
+  const targets=cards.slice(0,24);
+  const resolved=[];
+  for(let i=0;i<targets.length;i+=4)resolved.push(...await Promise.all(targets.slice(i,i+4).map(enrich)));
+  // Do not filter official results by name: the official query also searches card text.
+  const results=resolved.map(({_status,_title,_error,...rest})=>rest);
+  const out={results,hasNext:count!==null?page*50<count:/class\s*=\s*["'][^"']*next[^"']*["']/i.test(d.html),page,source:'official-live',total:count,warning:results.length?undefined:'検索結果を抽出できませんでした。検索条件またはHTML構造を診断してください。'};
+  if(debug){
+   const title=plain((d.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[])[1]||'');
+   const keywordInput=(d.html.match(/<input\b[^>]*name\s*=\s*["']keyword["'][^>]*>/i)||[])[0]||'';
+   out.debug={version:'2.31.6',requestedKeyword:q,upstreamUrl:upstream,requestMethod:method,requestBody:searchBody(q,page),finalUrl:d.url,upstreamStatus:d.status,htmlLength:d.html.length,htmlContainsKeyword:d.html.includes(q),pageTitle:title,keywordInput:keywordInput.slice(0,350),cardBlocks:(d.html.match(/class\s*=\s*["'][^"']*cardImage/gi)||[]).length,foundCards:cards.length,officialTotal:count,firstIds:cards.slice(0,5).map(c=>c.id),firstListNames:cards.slice(0,5).map(c=>c.name),detailChecks:resolved.slice(0,3).map(c=>({id:c.id,name:c.name,status:c._status||null,error:c._error||null,title:c._title||null})),matchedCards:results.length};
+  }
+  return reply(out);
+ }catch(e){return reply({results:[],hasNext:false,error:'公式検索へのアクセスに失敗しました: '+String(e.message||e)},502)}
 }};
