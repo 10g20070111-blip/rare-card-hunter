@@ -4,7 +4,7 @@ function openDB(){return new Promise((ok,no)=>{const r=indexedDB.open(DB_NAME,DB
 async function load(){cards=await req(st('cards').getAll());const s=await req(st('settings').getAll());s.forEach(x=>settings[x.key]=x.value);settings.message??='わたしたちはレアカードハンター！';settings.bubble??=true;settings.characterSize??=120;settings.tone??='dawasa';paintHome();paintSettings()}
 async function saveSetting(k,v){settings[k]=v;await req(st('settings','readwrite').put({key:k,value:v}))}async function saveCard(c){await req(st('cards','readwrite').put(c));await load()}
 function show(id){document.querySelectorAll('.screen').forEach(x=>x.classList.toggle('active',x.id===id))}document.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>show('home'));$('goRegister').onclick=()=>{show('register');resetRegister()};$('goWishlist').onclick=()=>{show('wishlist');activeCollectionTab='registered';searchQuery='';$('collectionSearch').value='';paintCollection()};$('goSettings').onclick=()=>{show('settings');paintSettings()};$('collectionGoRegister').onclick=()=>{show('register');resetRegister();$('officialSearchInput').value='';$('officialSearchResults').innerHTML='';$('officialSearchStatus').textContent=''};
-function paintHome(){document.body.style.backgroundImage=settings.background?`linear-gradient(#171526aa,#171526dd),url('${settings.background}')`:'';document.body.style.backgroundSize='cover';document.body.style.backgroundAttachment='fixed';$('mainMessage').textContent=settings.message||'わたしたちはレアカードハンター！';$('cardCount').textContent=`登録カード ${cards.length}枚`;$('wishSummary').textContent=`購入予定 ${cards.filter(c=>c.wanted).length}種類`;$('character').style.width=settings.characterSize+'px';$('character').style.height=Math.round(settings.characterSize*1.15)+'px';$('character').innerHTML=settings.character?`<img src="${settings.character}" alt="ナビゲーター">`:'🐰';$('character').classList.toggle('has-image',!!settings.character);$('bubble').classList.toggle('hidden',!settings.bubble);$('bubble').textContent=phrase('ホームへようこそ！')}
+function paintHome(){document.body.style.backgroundImage=settings.background?`linear-gradient(#171526aa,#171526dd),url('${settings.background}')`:'';document.body.style.backgroundSize='cover';document.body.style.backgroundAttachment='fixed';$('mainMessage').textContent=settings.message||'わたしたちはレアカードハンター！';$('cardCount').textContent=`登録カード ${cards.length}枚`;$('wishSummary').textContent=`購入予定 ${cards.filter(c=>c.wanted).length}種類`;const displaySize=Math.min(140,Math.max(70,Number(settings.characterSize)||120));$('character').style.width=displaySize+'px';$('character').style.height=Math.round(displaySize*1.15)+'px';$('character').innerHTML=settings.character?`<img src="${settings.character}" alt="ナビゲーター">`:'🐰';$('character').classList.toggle('has-image',!!settings.character);$('bubble').classList.toggle('hidden',!settings.bubble);$('bubble').textContent=phrase('ホームへようこそ！')}
 function phrase(s){if(settings.tone==='ojou')return 'ごきげんよう！カード探しのお手伝いをいたしますわ。';if(settings.tone==='polite')return s.replace(/だわさ/g,'です').replace(/！/g,'。');if(settings.tone==='simple')return 'カードを登録してみよう！';return s.endsWith('だわさ')?s:s+'だわさ'}
 function paintSettings(){$('settingMessage').value=settings.message||'';$('bubbleToggle').checked=!!settings.bubble;$('characterSize').value=settings.characterSize||120;$('sizeValue').textContent=(settings.characterSize||120)+'px';$('navigatorTone').value=settings.tone||'dawasa'}$('characterSize').oninput=e=>$('sizeValue').textContent=e.target.value+'px';
 $('saveSettings').onclick=async()=>{await saveSetting('message',$('settingMessage').value.trim()||'わたしたちはレアカードハンター！');await saveSetting('bubble',$('bubbleToggle').checked);await saveSetting('characterSize',+$('characterSize').value);await saveSetting('tone',$('navigatorTone').value);paintHome();alert('設定を保存しました。')};
@@ -326,16 +326,22 @@ async function searchOfficialCards(q,page=1){
    return {name,number,url,image:thumb};
   }catch{return null}
  }));
- return results.filter(Boolean);
+ // Some reader gateways ignore the encoded ?v= search filter and return
+ // the latest cards. Never present unrelated cards as search matches.
+ const normalize=x=>String(x||'').normalize('NFKC').toLocaleLowerCase('ja-JP').replace(/[\\s　・･「」『』（）()【】!！?？]/g,'');
+ const query=normalize(q);
+ return results.filter(r=>r&&normalize(r.name).includes(query));
 }
-let officialSearchPage=1,officialSearchTerm='';
+let officialSearchPage=1,officialSearchTerm='',officialSearchRequest=0;
 async function runOfficialSearch(q,page=1){
+ const requestId=++officialSearchRequest;
  $('officialSearchButton').disabled=true;
  $('officialSearchStatus').textContent=`公式カードを検索中…（${page}ページ）`;
  try{
   const results=await searchOfficialCards(q,page);
+  if(requestId!==officialSearchRequest)return;
   officialSearchPage=page;officialSearchTerm=q;
-  $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補`:'このページには候補がありません。';
+  $('officialSearchStatus').textContent=results.length?`${page}ページ目：${results.length}件の候補`:'一致するカードが見つかりません。公式検索の応答が検索語を無視している可能性があります。';
   const html=results.map((r,i)=>`<div class="official-result"><div class="official-result-main">${r.image?`<img class="official-result-thumb" src="${escapeAttr(r.image)}" alt="" loading="lazy">`:''}<div class="official-result-title"><b>${escapeHtml(r.name)}</b><small>${escapeHtml(r.number||'コレクター番号不明')}</small></div></div><small class="official-result-url">${escapeHtml(r.url)}</small><div class="button-row"><button class="action secondary" data-copy-search="${i}">URLをコピー</button><button class="action primary" data-register-search="${i}">このカードを登録</button></div></div>`).join('');
   $('officialSearchResults').innerHTML=`<details class="search-collapse" open><summary>検索結果を表示・折りたたむ（${page}ページ・${results.length}件）</summary>${html}<nav class="search-pagination"><button class="action secondary" id="searchPrevious" ${page<=1?'disabled':''}>前</button><span>${page} ページ</span><button class="action primary" id="searchNext" ${results.length===0?'disabled':''}>次</button></nav></details>`;
   $('searchPrevious').onclick=()=>runOfficialSearch(q,page-1);
@@ -343,12 +349,12 @@ async function runOfficialSearch(q,page=1){
   document.querySelectorAll('[data-copy-search]').forEach(b=>b.onclick=async()=>{const r=results[+b.dataset.copySearch];try{await navigator.clipboard.writeText(r.url);b.textContent='コピーしました';}catch{$('sourceUrl').value=r.url;b.textContent='URL欄に入力しました';}});
   document.querySelectorAll('[data-register-search]').forEach(b=>b.onclick=()=>{const r=results[+b.dataset.registerSearch];$('sourceUrl').value=r.url;$('fetchPage').click();});
   if(page>1)$('officialSearchResults').scrollIntoView({behavior:'smooth',block:'start'});
- }catch(e){$('officialSearchStatus').textContent='検索に失敗しました。通信状態を確認して再試行してください。'}
- finally{$('officialSearchButton').disabled=false;}
+ }catch(e){if(requestId!==officialSearchRequest)return;$('officialSearchStatus').textContent='検索に失敗しました。通信状態を確認して再試行してください。'}
+ finally{if(requestId===officialSearchRequest)$('officialSearchButton').disabled=false;}
 }
 $('officialSearchButton').onclick=()=>{
  const q=$('officialSearchInput').value.trim();
- if(q.length<4){$('officialSearchStatus').textContent='カード名を4文字以上入力してください。';return;}
+ if(q.length<2){$('officialSearchStatus').textContent='カード名を2文字以上入力してください。';return;}
  runOfficialSearch(q,1);
 };
 $('officialSearchInput').addEventListener('keydown',e=>{if(e.key==='Enter')$('officialSearchButton').click()});
