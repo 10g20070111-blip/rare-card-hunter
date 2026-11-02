@@ -163,7 +163,7 @@ async function fetchReader(url){
  if(readerCache.has(url))return readerCache.get(url);
  const job=(async()=>{
   const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),9500);
+  const timeout=setTimeout(()=>controller.abort(),6500);
   try{
    const response=await fetch('https://r.jina.ai/'+url,{method:'GET',mode:'cors',credentials:'omit',headers:{'Accept':'text/plain'},signal:controller.signal});
    if(!response.ok)throw Error('Reader HTTP '+response.status);
@@ -185,10 +185,6 @@ function officialCardImage(url){
   return `https://dm.takaratomy.co.jp/wp-content/card/cardimage/${encodeURIComponent(id)}.jpg`;
  }catch{return ''}
 }
-const OFFICIAL_VERIFIED_FLAVOR={
- 'dmart05-003':'いただきぃっ！ — 地封院ギャイ\nぎゃびーん！ — 真久間メガ',
- 'dm26rp3-TD004':'もも！も～!! び～っくりっ！ ー うららかもも'
-};
 function extractOfficialMarkdown(md,url){
  const lines=String(md||'').replace(/\r/g,'').split('\n');
  const heading=lines.find(x=>/^#{1,4}\s+/.test(x)&&/\((?:DM[A-Z0-9-]+\s+)?[^()]*\d+\/[^()]*\d+\)/i.test(x))
@@ -210,11 +206,11 @@ function extractOfficialMarkdown(md,url){
 
  if(!sections.flavor){
   const m=String(md).match(/(?:^|\n)\s*(?:#{1,6}\s*)?フレーバー(?:テキスト)?\s*\n(?:\s*[-─_]{3,}\s*\n)?([^\n]+)/);
-  if(m&&m[1]&&!/^(?:\*|[-+])\s*DM/i.test(m[1].trim()))sections.flavor=cleanText(m[1]);
+  if(m&&m[1]&&!/^(?:\*|[-+])\s*(?:DM|商品情報|このカードのよくある質問|同名カード)/i.test(m[1].trim()))sections.flavor=cleanText(m[1]);
  }
  const number=collectorFromOfficial(md,url)||((heading.match(/\((DM[^)]+)\)/i)||[])[1]||'').replace(/^DM/i,'').replace(/\s+/, '  ');
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
- text:normalizeRules(sections.rules),flavor:sections.flavor||OFFICIAL_VERIFIED_FLAVOR[(new URL(url)).searchParams.get('id')]||'',
+ text:normalizeRules(sections.rules),flavor:sections.flavor||'',
  image:officialCardImage(url),url,type:get('カードの種類'),civilization:get('文明'),
  rarity:get('レアリティ'),power:get('パワー'),race:get('種族')};
 }
@@ -336,6 +332,12 @@ function officialDetailLinks(md){
 const VERIFIED_CARDS=[
  ['轟䡛合体 ゴルギーオージャー','dm25rp2-S07','25RP2  S7/S11'],
  ['轟䡛合体 ゴルギーオージャー','dm25ex3-rp2S07','25EX3  S7/S11'],
+ ['地封龍 ギャイア','dmrp16-s05','RP16  S5/S11'],
+ ['地封龍 ギャイア','dmart05-003','ART05  3/5'],
+ ['地封龍 ギャイア','dm26rp3-TD004','26RP3  TD4/TD5'],
+ ['地封龍 ギャイア','dm26sd1-h007','26SD1  7/16'],
+ ['地封龍 ギャイア','dm26sd1-y002F','26SD1  2F/11'],
+ ['轟䡛合体 ゴルギーオージャー','dm25rp2-Sec08','25RP2  ㊙8/㊙24'],
  ['蒼き団長 ドギラゴン剣','dmex06-dk3','EX06  DK3/DK6'],
  ['蒼き団長 ドギラゴン剣','dm24bd1-006','24BD1  6/21'],
  ['蒼き団長 ドギラゴン剣','dm26ex4-CHO004','26EX4  超4/超50'],
@@ -350,23 +352,30 @@ const VERIFIED_CARDS=[
  ['蒼き団長 ドギラゴン剣','promoy25-003','PROMOY25  P3/Y25'],
  ['蒼き団長 ドギラゴン剣','promoy19-024','PROMOY19  P24/Y19']
 ].map(([name,id,number])=>({name,number,url:'https://dm.takaratomy.co.jp/card/detail/?id='+id,image:officialCardImage('https://dm.takaratomy.co.jp/card/detail/?id='+id)}));
+// Persist discovered official URLs in browser storage to prevent losing previously found cards.
+const searchCatalogKey='rch-official-search-catalog-v1';
+function getSearchCatalog(){try{return JSON.parse(localStorage.getItem(searchCatalogKey)||'{}')}catch{return {}}}
+function addSearchCatalog(items){try{const all=getSearchCatalog();for(const x of items)if(x?.url&&x?.name)all[x.url]={name:x.name,number:x.number||'',url:x.url,image:x.image||officialCardImage(x.url)};const keys=Object.keys(all);for(const key of keys.slice(0,Math.max(0,keys.length-1200)))delete all[key];localStorage.setItem(searchCatalogKey,JSON.stringify(all))}catch{}}
 async function searchOfficialCards(q,page=1,onPartial=()=>{}){
  const query=normalizeCardSearch(q);
- const payload={keyword:q,keyword_type:['card_name'],pagenum:String(page),samename:'show',sort:'release_new'};
+ const payload={suggest:'on',keyword:q,keyword_type:['card_name'],culture_cond:['単色','多色'],pagenum:String(page),samename:'show',sort:'release_new'};
  const official='https://dm.takaratomy.co.jp/card/?v='+encodeURIComponent(JSON.stringify(payload));
- const google='https://www.google.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&num=60&start='+((page-1)*60);
- const bing='https://www.bing.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ "'+q+'"')+'&first='+((page-1)*50+1);
- const known=page===1?VERIFIED_CARDS.filter(x=>normalizeCardSearch(x.name).includes(query)):[];
- const found=new Map(known.map(x=>[x.url,x]));
- if(known.length)onPartial([...found.values()]);
+ const google='https://www.google.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ '+q)+'&num=100&start='+((page-1)*100);
+ const bing='https://www.bing.com/search?q='+encodeURIComponent('site:dm.takaratomy.co.jp/card/detail/ '+q)+'&first='+((page-1)*50+1);
+ const cached=Object.values(getSearchCatalog()).filter(x=>normalizeCardSearch(x.name).includes(query));
+ const known=VERIFIED_CARDS.filter(x=>normalizeCardSearch(x.name).includes(query));
+ const found=new Map([...known,...cached].map(x=>[x.url,x]));
+ if(found.size)onPartial([...found.values()]);
+ // The official listing can contain valid card links even if third-party web search ignores the query.
+ // Avoid requiring every detail request to succeed just to retain the candidate list.
+ const seen=new Set(found.keys());
  const feeds=[official,google,bing].map(async endpoint=>{
   try{
-   const text=await fetchReader(endpoint);
-   const urls=officialDetailLinks(text).filter(url=>!found.has(url)).slice(0,24);
-   // Process in groups and show results as soon as each group is complete.
-   for(let i=0;i<urls.length;i+=6){
-    const batch=await Promise.all(urls.slice(i,i+6).map(async url=>{
-     if(found.has(url))return null;
+   const body=await fetchReader(endpoint);
+   const urls=officialDetailLinks(body).filter(url=>!seen.has(url)).slice(0,65);
+   for(const url of urls)seen.add(url);
+   for(let i=0;i<urls.length;i+=10){
+    const batch=await Promise.all(urls.slice(i,i+10).map(async url=>{
      try{
       const detail=await fetchReader(url);
       const card=extractOfficialMarkdown(detail,url);
@@ -376,7 +385,7 @@ async function searchOfficialCards(q,page=1,onPartial=()=>{}){
     }));
     let changed=false;
     for(const item of batch)if(item&&!found.has(item.url)){found.set(item.url,item);changed=true;}
-    if(changed)onPartial([...found.values()]);
+    if(changed){addSearchCatalog(batch.filter(Boolean));onPartial([...found.values()]);}
    }
   }catch{}
  });
