@@ -22,8 +22,21 @@ function cleanCardRules(raw=''){
  return cleanText(s);
 }
 // Preserve official ability bullets, including lines that lost their marker in HTML/Markdown conversion.
+// Convert only real official ability list boundaries to squares. Do not split at sentence punctuation.
+function splitPrintedAbilityBullets(raw=''){
+ let s=String(raw||'').replace(/\r/g,'');
+ s=s.replace(/(^|\n)\s*[•●▪・]\s*(?=\S)/g,'$1■ ');
+ // Reader sometimes collapses the official <li> list into a single line.
+ // Separate the distinct abilities, but never the middle dot in T・ブレイカー.
+ if(!s.includes('\n') && (s.match(/(?:\s|^)[*•●▪・]\s*/g)||[]).length>1){
+  s=s.replace(/\s*[•●▪]\s*(?=\S)/g,'\n■ ')
+    .replace(/\s+・\s*(?=\S)/g,'\n■ ');
+ }
+ s=s.replace(/([。！？])\s*[・•●]\s*(?=(?:革命チェンジ|自分の|T[・･]ブレイカー|ファイナル革命|ブロッカー|スピードアタッカー))/g,'$1\n■ ');
+ return s;
+}
 function normalizeRules(raw=''){
- let t=cleanCardRules(raw).replace(/\r/g,'');
+ let t=cleanCardRules(splitPrintedAbilityBullets(raw)).replace(/\r/g,'');
  t=t.replace(/(?:^|\n)\s*(?:\*|※|■)\s*(?=\S)/g,'\n■ ')
   .replace(/(^|\n)\s*(?:\*|※|■|●|◆|▪|•)\s*/g,'$1■ ')
   .replace(/(^|\n)\s*[-+]\s+(?=\S)/g,'$1■ ');
@@ -133,10 +146,10 @@ async function enrichProducts(card){
  for(const p of original){
   if(!p?.name)continue;
   const code=codeFromProduct(p),entry=verified.get(code);
-  const item=entry?{...p,name:entry.name,url:entry.url,image:entry.image||'',fallbackImage:entry.fallbackImage||'',verifiedProduct:true,legacyFallback:false}:{...p,verifiedProduct:false};
+  const item=entry?{...p,name:entry.name,url:entry.url,image:entry.originalImage||entry.image||'',fallbackImage:entry.image||entry.fallbackImage||'',verifiedProduct:true,legacyFallback:false}:{...p,verifiedProduct:false};
   merged.set(code||p.name,item);
  }
- for(const entry of verified.values())if(!merged.has(entry.code))merged.set(entry.code,{name:entry.name,url:entry.url,image:entry.image||'',fallbackImage:entry.fallbackImage||'',verifiedProduct:true});
+ for(const entry of verified.values())if(!merged.has(entry.code))merged.set(entry.code,{name:entry.name,url:entry.url,image:entry.originalImage||entry.image||'',fallbackImage:entry.image||entry.fallbackImage||'',verifiedProduct:true});
  return {...card,products:[...merged.values()]};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
@@ -411,6 +424,15 @@ function officialHtmlDetails(html,url){
  copy.querySelectorAll('li,p,h1,h2,h3,h4,dt,dd,tr').forEach(n=>n.appendChild(doc.createTextNode('\n')));
  const text=(copy.textContent||'').replace(/\r/g,'').replace(/[ \t]+/g,' ').replace(/\n[ \t]*/g,'\n');
  const part=text.match(/フレーバー(?:テキスト)?\s*\n?\s*(?:[-─]{2,}\s*)?([\s\S]*?)(?=\s*(?:商品情報|このカードのよくある質問|同名カードが含まれる商品|関連カード|よくある質問|$))/);
+ const abilityHeader=[...doc.querySelectorAll('h1,h2,h3,h4,dt,th,div,p,strong,b')].find(n=>n.children.length===0 && /^特殊能力\s*$/.test((n.textContent||'').trim()));
+ let printedRules='';
+ if(abilityHeader){
+  let node=abilityHeader;
+  for(let i=0;i<5&&node;i++,node=node.nextElementSibling){
+   const list=node.querySelector?.('ul,ol') || (node.matches?.('ul,ol')?node:null);
+   if(list){const items=[...list.children].filter(x=>x.matches('li')).map(x=>(x.textContent||'').trim()).filter(Boolean);if(items.length){printedRules=items.map(x=>'■ '+x.replace(/^[•●▪・■]\s*/,'')).join('\n');break;}}
+  }
+ }
  const flavor=officialFlavorFromHtml(doc)||(part?.[1]||'').split('\n').map(x=>x.trim()).filter(Boolean).filter(x=>!/^[-─]{2,}$/.test(x)).join(' ').trim();
  // Only official product URLs; these can include same-name reprint products.
  const products=[],seen=new Set();
@@ -425,7 +447,7 @@ function officialHtmlDetails(html,url){
  const productSection=(doc.body?.textContent||'').split('同名カードが含まれる商品を表示').pop()||'';
  for(const line of productSection.split(/\n/).slice(0,75)){const name=line.replace(/\s+/g,' ').trim();if(/^(?:DM(?:R|EX|BD|ART|\d{2})[- ]?\d*|プロモ限定カード)/i.test(name)&&name.length<180)fallback.push({name,url:'',image:'',legacyFallback:true});}
  const merged=new Map();for(const p of [...products,...fallback]){const k=normalizeProductCode(p.name)||p.name;if(!merged.has(k)||(!merged.get(k).url&&p.url))merged.set(k,p);}
- return {flavor:flavor.length<=1200?flavor:'',products:[...merged.values()].slice(0,60)};
+ return {flavor:flavor.length<=1200?flavor:'',rules:printedRules,products:[...merged.values()].slice(0,60)};
 }
 $('fetchPage').onclick=async()=>{
  const url=validUrl($('sourceUrl').value.trim());
@@ -445,7 +467,7 @@ $('fetchPage').onclick=async()=>{
   const isOfficial=url.hostname==='dm.takaratomy.co.jp';
   if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}}
   else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
-  if(isOfficial&&officialExtra){if(officialExtra.flavor)parsed.flavor=officialExtra.flavor;if(officialExtra.products.length){const all=[...(parsed.products||[]),...officialExtra.products];const merged=new Map();for(const x of all){const k=normalizeProductCode(x.name)||x.name;if(!merged.has(k)||(!merged.get(k).url&&x.url))merged.set(k,x);}parsed.products=[...merged.values()];}}
+  if(isOfficial&&officialExtra){if(officialExtra.rules)parsed.text=normalizeRules(officialExtra.rules);if(officialExtra.flavor)parsed.flavor=officialExtra.flavor;if(officialExtra.products.length){const all=[...(parsed.products||[]),...officialExtra.products];const merged=new Map();for(const x of all){const k=normalizeProductCode(x.name)||x.name;if(!merged.has(k)||(!merged.get(k).url&&x.url))merged.set(k,x);}parsed.products=[...merged.values()];}}
   if(isOfficial){
    // Some official titles carry a set/serial identifier not recognized by the older parser.
    const titleNumber=(String(body).match(/(?:^|\n)\s*(?:Title:|#{1,4}\s*)?[^\n]{1,120}?[（(]\s*(DM[A-Z0-9-]+\s+[^)（）]{1,35})\s*[)）]/i)||[])[1]||'';

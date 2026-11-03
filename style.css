@@ -105,3 +105,8 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 /* v2.31.20 */
 .product-category .pack-grid{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:12px!important}
 @media(max-width:680px){.product-category .pack-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+
+/* v2.31.24: uniform portrait packaging slots, regardless of source orientation. */
+.pack-item img,.pack-image-placeholder{width:100%!important;max-width:190px!important;height:auto!important;aspect-ratio:223/435!important;object-fit:contain!important;object-position:center center!important;flex-shrink:0;background:#29233a;}
+.pack-item img{display:block;}
+.pack-item{justify-content:flex-start!important;}
