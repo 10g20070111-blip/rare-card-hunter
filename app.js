@@ -115,10 +115,11 @@ function officialProductLinks(raw=''){
 const productImageCache=new Map();
 async function productImageFromOfficial(product){
  const key=product.url;
+ if(!key)return '';
  if(productImageCache.has(key))return productImageCache.get(key);
  const task=(async()=>{
   try{
-   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23120');
+   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23121');
    const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
    if(response.ok){const data=await response.json();if(data.image&&data.selection!=='metadata'&&data.verifiedPackage)return data.image;}
   }catch{}
@@ -129,7 +130,10 @@ async function enrichProducts(card){
  const products=Array.isArray(card.products)?card.products:[];
  if(!products.length)return card;
  const unique=[...new Map(products.filter(p=>p?.name).map(p=>[(p.url||p.name).split('#')[0],p])).values()].slice(0,30);
- return {...card,products:await Promise.all(unique.map(async p=>({...p,image:(!p.url||p.legacyFallback||isPromotion(card.number,p))?'':(p.image||await productImageFromOfficial(p))})))};
+ const result={...card,products:unique.map(p=>({...p,image:p.image||''}))};
+ const queue=unique.map((p,i)=>({p,i})).filter(({p})=>p.url&&!p.legacyFallback&&!isPromotion(card.number,p)&&!p.image);
+ let index=0;async function worker(){while(index<queue.length){const {p,i}=queue[index++];result.products[i].image=await productImageFromOfficial(p);if(typeof result.onProductImage==='function')result.onProductImage(result.products);}}
+ await Promise.all(Array.from({length:Math.min(4,queue.length)},worker));return result;
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
 function splitOfficialSections(raw=''){return officialSections(raw);}
@@ -301,7 +305,7 @@ function extractOfficialMarkdown(md,url){
  const officialPower=/^(?:[0-9０-９]{3,6}(?:\+|＋)?|\*|∞|0)$/.test(officialPowerRaw.trim())?officialPowerRaw.trim():'';
  const number=collectorFromOfficial(md,url)||((heading.match(/[（(]\s*(DM[^)）]+)[)）]/i)||[])[1]||'').trim();
  return {name:title,cost:(get('コスト').match(/\d+/)||[])[0]||'',number,
- text:normalizeRules(sections.rules),flavor:sections.flavor||'',products:(()=>{const links=officialProductLinks(md);return links.length?links:legacyOfficialProducts(md,url)})(),
+ text:normalizeRules(sections.rules),flavor:sections.flavor||'',products:(()=>{const links=officialProductLinks(md),old=legacyOfficialProducts(md,url);const merged=new Map();for(const x of [...links,...old]){const k=normalizeProductCode(x.name)||x.name;if(!merged.has(k)||(!merged.get(k).url&&x.url))merged.set(k,x)}return [...merged.values()]})(),
  image:officialCardImage(url),url,type:get('カードの種類'),civilization:get('文明'),
  rarity:get('レアリティ'),power:officialPower,race:get('種族')};
 }
@@ -414,6 +418,8 @@ function officialHtmlDetails(html,url){
   seen.add(href.href);products.push({name,url:href.href,image:''});
  }
  const fallback=legacyOfficialProducts(doc.body?.textContent||'',url);
+ const productSection=(doc.body?.textContent||'').split('同名カードが含まれる商品を表示').pop()||'';
+ for(const line of productSection.split(/\n/).slice(0,75)){const name=line.replace(/\s+/g,' ').trim();if(/^(?:DM(?:R|EX|BD|ART|\d{2})[- ]?\d*|プロモ限定カード)/i.test(name)&&name.length<180)fallback.push({name,url:'',image:'',legacyFallback:true});}
  const merged=new Map();for(const p of [...products,...fallback]){const k=normalizeProductCode(p.name)||p.name;if(!merged.has(k)||(!merged.get(k).url&&p.url))merged.set(k,p);}
  return {flavor:flavor.length<=1200?flavor:'',products:[...merged.values()].slice(0,60)};
 }
@@ -470,6 +476,8 @@ function normalizeProductCode(value=''){
  if(m)return 'DM'+m[1]+String(Number(m[2]));
  m=v.match(/DMART\s*[- ]?\s*(\d{1,3})/);if(m)return 'DMART'+Number(m[1]);
  m=v.match(/DMART\s*[- ]?\s*(\d{1,3})/);if(m)return 'DMART'+Number(m[1]);
+ // Legacy DMR-21 / DMR21 series (distinct from DM-21).
+ m=v.match(/DMR\s*[- ]?\s*(\d{1,3})(?!\d)/);if(m)return 'DMR'+Number(m[1]);
  // Original DM-01 to DM-39 and later legacy sets.
  m=v.match(/DM\s*[- ]?\s*(\d{1,2})(?!\d|[A-Z])/);
  if(m)return 'DM'+String(Number(m[1]));
@@ -506,7 +514,7 @@ function renderProductInfo(target,products,collectorNumber='',cardUrl=''){
  function tile(p,cat,match=false){
   const url=/^https:\/\/dm\.takaratomy\.co\.jp\//.test(p.url||'')?p.url:'';
   const tag=url?'a':'div';const attrs=url?` href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"`:'';
-  const picture=cat==='promo'?'<div class="pack-image-placeholder pack-promo-placeholder">プロモーションカード</div>':p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async">`:`<div class="pack-image-placeholder">${cat==='art'?'神アート':p.legacyFallback?'旧商品・画像未登録':'商品画像なし'}</div>`;
+  const picture=cat==='promo'?'<div class="pack-image-placeholder pack-promo-placeholder">プロモーションカード</div>':p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'商品画像を取得できません'}))">`:`<div class="pack-image-placeholder">${cat==='art'?'神アート':p.legacyFallback?'旧商品・画像未登録':'商品画像なし'}</div>`;
   return `<${tag} class="pack-item${match?' pack-item-matched':''}"${attrs}>${match?'<strong class="pack-match-label">このバージョンの収録商品</strong>':''}${picture}<span>${escapeHtml(p.name)}</span></${tag}>`;
  }
  for(const p of data){const cat=productCategory(p);groups[cat].push(tile(p,cat,versionMatchesProduct(collectorNumber,p)));}
