@@ -110,3 +110,7 @@ body{background-color:#171526;background-position:center;background-repeat:no-re
 .pack-item img,.pack-image-placeholder{width:100%!important;max-width:190px!important;height:auto!important;aspect-ratio:223/435!important;object-fit:contain!important;object-position:center center!important;flex-shrink:0;background:#29233a;}
 .pack-item img{display:block;}
 .pack-item{justify-content:flex-start!important;}
+
+/* v2.31.25: fixed portrait slots; letterbox banners without distortion */
+.pack-item img{height:260px!important;aspect-ratio:auto!important;width:100%!important;object-fit:contain!important;}
+.pack-image-placeholder{height:260px!important;aspect-ratio:auto!important;}

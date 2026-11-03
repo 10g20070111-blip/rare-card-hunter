@@ -35,8 +35,22 @@ function splitPrintedAbilityBullets(raw=''){
  s=s.replace(/([。！？])\s*[・•●]\s*(?=(?:革命チェンジ|自分の|T[・･]ブレイカー|ファイナル革命|ブロッカー|スピードアタッカー))/g,'$1\n■ ');
  return s;
 }
+// Official HTML/reader fallback: preserve each printed bullet, including a single flattened line.
+function recoverOfficialBulletLines(raw=''){
+ let s=String(raw||'').replace(/\r/g,'');
+ // Markdown list item at beginning of a line.
+ s=s.replace(/(^|\n)\s*(?:\*|•|●|▪|・)\s+(?=\S)/g,'$1■ ');
+ // Flattened official bullets between independent ability clauses.
+ s=s.replace(/([。！？])\s*(?:\*|•|●|▪|・)\s*(?=\S)/g,'$1\n■ ');
+ // Some reader conversions strip list markers and leave only a space before an ability heading.
+ const heads=['革命チェンジ','T[・･]ブレイカー','ファイナル革命'];
+ for(const head of heads){const re=new RegExp('([。])\\s*(?='+head+')','g');s=s.replace(re,'$1\n■ ');}
+ // Printed revolution change ends at its cost/type qualifier, not at a Japanese full stop.
+ s=s.replace(/(革命チェンジ[^\n]{1,110}?ドラゴン)\s+(?=自分の多色クリーチャー)/g,'$1\n■ ');
+ return s;
+}
 function normalizeRules(raw=''){
- let t=cleanCardRules(splitPrintedAbilityBullets(raw)).replace(/\r/g,'');
+ let t=cleanCardRules(splitPrintedAbilityBullets(recoverOfficialBulletLines(raw))).replace(/\r/g,'');
  t=t.replace(/(?:^|\n)\s*(?:\*|※|■)\s*(?=\S)/g,'\n■ ')
   .replace(/(^|\n)\s*(?:\*|※|■|●|◆|▪|•)\s*/g,'$1■ ')
   .replace(/(^|\n)\s*[-+]\s+(?=\S)/g,'$1■ ');
@@ -141,15 +155,25 @@ async function enrichProducts(card){
  const printed=codeFromCollector(card.number);
  if(printed)codes.add(printed);
  const catalog=await Promise.all([...codes].slice(0,24).map(officialProductByCode));
+ // Verified official historical product thumbnail; direct source avoids image-proxy failures.
+ const legacyThumb=code=>/^DMR\d{1,3}$/.test(code)?`https://dm.takaratomy.co.jp/wp-content/themes/dm2019/img/product/${code.toLowerCase()}/thumb.jpg`:'';
+
  const verified=new Map(catalog.filter(Boolean).map(p=>[p.code,p]));
+ for(const p of original){const code=codeFromProduct(p);
+  if(/^DMR\d{1,3}$/.test(code)&&code===printed&&!verified.has(code)&&/^(?:DMR[- ]?\d+)\s+/.test(p.name||'')){
+   // Explicit official card product listing is evidence; not merely collector inference.
+   verified.set(code,{code,name:p.name,url:p.url||'',originalImage:legacyThumb(code),image:legacyThumb(code),verified:true,source:'official-card-product-list'});
+  }
+ }
+
  const merged=new Map();
  for(const p of original){
   if(!p?.name)continue;
   const code=codeFromProduct(p),entry=verified.get(code);
-  const item=entry?{...p,name:entry.name,url:entry.url,image:entry.originalImage||entry.image||'',fallbackImage:entry.image||entry.fallbackImage||'',verifiedProduct:true,legacyFallback:false}:{...p,verifiedProduct:false};
+  const item=entry?{...p,name:entry.name,url:entry.url,image:legacyThumb(code)||entry.originalImage||entry.image||'',fallbackImage:entry.originalImage||entry.image||entry.fallbackImage||'',verifiedProduct:true,legacyFallback:false}:{...p,verifiedProduct:false};
   merged.set(code||p.name,item);
  }
- for(const entry of verified.values())if(!merged.has(entry.code))merged.set(entry.code,{name:entry.name,url:entry.url,image:entry.originalImage||entry.image||'',fallbackImage:entry.image||entry.fallbackImage||'',verifiedProduct:true});
+ for(const entry of verified.values())if(!merged.has(entry.code))merged.set(entry.code,{name:entry.name,url:entry.url,image:legacyThumb(entry.code)||entry.originalImage||entry.image||'',fallbackImage:entry.originalImage||entry.image||entry.fallbackImage||'',verifiedProduct:true});
  return {...card,products:[...merged.values()]};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
@@ -427,12 +451,22 @@ function officialHtmlDetails(html,url){
  const abilityHeader=[...doc.querySelectorAll('h1,h2,h3,h4,dt,th,div,p,strong,b')].find(n=>n.children.length===0 && /^特殊能力\s*$/.test((n.textContent||'').trim()));
  let printedRules='';
  if(abilityHeader){
+  // Find the first list after the label, stopping at the flavor/product heading.
   let node=abilityHeader;
-  for(let i=0;i<5&&node;i++,node=node.nextElementSibling){
-   const list=node.querySelector?.('ul,ol') || (node.matches?.('ul,ol')?node:null);
-   if(list){const items=[...list.children].filter(x=>x.matches('li')).map(x=>(x.textContent||'').trim()).filter(Boolean);if(items.length){printedRules=items.map(x=>'■ '+x.replace(/^[•●▪・■]\s*/,'')).join('\n');break;}}
+  for(let i=0;i<12&&node;i++,node=node.nextElementSibling){
+   if(i>0&&/^(?:フレーバー|商品情報|同名カード)/.test((node.textContent||'').trim().slice(0,20)))break;
+   const list=node.matches?.('ul,ol')?node:node.querySelector?.('ul,ol');
+   if(list){const items=[...list.querySelectorAll('li')].map(x=>(x.textContent||'').trim()).filter(Boolean);
+    if(items.length>=2){printedRules=items.map(x=>'■ '+x.replace(/^[•●▪・■]\s*/,'')).join('\n');break;}}
   }
  }
+ // Other official templates use div/p items rather than a UL.
+ if(!printedRules){
+  const m=text.match(/特殊能力\s*\n([\s\S]*?)(?=\n\s*フレーバー)/);
+  if(m){const items=m[1].split('\n').map(x=>x.trim()).filter(x=>x&&!/^[-─]{2,}$/.test(x));
+   if(items.length>=2)printedRules=items.map(x=>'■ '+x.replace(/^[•●▪・*■]\s*/,'')).join('\n');}
+ }
+
  const flavor=officialFlavorFromHtml(doc)||(part?.[1]||'').split('\n').map(x=>x.trim()).filter(Boolean).filter(x=>!/^[-─]{2,}$/.test(x)).join(' ').trim();
  // Only official product URLs; these can include same-name reprint products.
  const products=[],seen=new Set();
@@ -467,7 +501,7 @@ $('fetchPage').onclick=async()=>{
   const isOfficial=url.hostname==='dm.takaratomy.co.jp';
   if(/<html[\s>]/i.test(body)){const doc=new DOMParser().parseFromString(body,'text/html');parsed=pageData(doc,url.href);if(isOfficial){const specific=extractOfficialMarkdown(doc.body?.innerText||doc.body?.textContent||'',url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}}
   else {parsed=markdownData(body,url.href);if(isOfficial){const specific=extractOfficialMarkdown(body,url.href);parsed={...parsed,...Object.fromEntries(Object.entries(specific).filter(([k,v])=>v)),text:specific.text||parsed.text||'',flavor:specific.flavor||''};}else{const wikiText=extractWikiOnlyCardText(body);if(wikiText)parsed.text=wikiText;}}
-  if(isOfficial&&officialExtra){if(officialExtra.rules)parsed.text=normalizeRules(officialExtra.rules);if(officialExtra.flavor)parsed.flavor=officialExtra.flavor;if(officialExtra.products.length){const all=[...(parsed.products||[]),...officialExtra.products];const merged=new Map();for(const x of all){const k=normalizeProductCode(x.name)||x.name;if(!merged.has(k)||(!merged.get(k).url&&x.url))merged.set(k,x);}parsed.products=[...merged.values()];}}
+  if(isOfficial&&officialExtra){if(officialExtra.rules)parsed.text=normalizeRules(officialExtra.rules);else if(parsed.text)parsed.text=normalizeRules(recoverOfficialBulletLines(parsed.text));if(officialExtra.flavor)parsed.flavor=officialExtra.flavor;if(officialExtra.products.length){const all=[...(parsed.products||[]),...officialExtra.products];const merged=new Map();for(const x of all){const k=normalizeProductCode(x.name)||x.name;if(!merged.has(k)||(!merged.get(k).url&&x.url))merged.set(k,x);}parsed.products=[...merged.values()];}}
   if(isOfficial){
    // Some official titles carry a set/serial identifier not recognized by the older parser.
    const titleNumber=(String(body).match(/(?:^|\n)\s*(?:Title:|#{1,4}\s*)?[^\n]{1,120}?[（(]\s*(DM[A-Z0-9-]+\s+[^)（）]{1,35})\s*[)）]/i)||[])[1]||'';
@@ -540,7 +574,7 @@ function renderProductInfo(target,products,collectorNumber='',cardUrl=''){
  function tile(p,cat,match=false){
   const url=/^https:\/\/dm\.takaratomy\.co\.jp\//.test(p.url||'')?p.url:'';
   const tag=url?'a':'div';const attrs=url?` href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"`:'';
-  const picture=cat==='promo'?'<div class="pack-image-placeholder pack-promo-placeholder">プロモーションカード</div>':p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" data-fallback="${escapeAttr(p.fallbackImage||'')}" loading="lazy" decoding="async" fetchpriority="low" onerror="if(!this.dataset.fallbackUsed&amp;&amp;this.dataset.fallback){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback}else{this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'商品画像を取得できません'}))}">`:`<div class="pack-image-placeholder">${cat==='art'?'神アート':p.legacyFallback?'公式商品ページ未確認':'商品画像なし'}</div>`;
+  const picture=cat==='promo'?'<div class="pack-image-placeholder pack-promo-placeholder">プロモーションカード</div>':p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" data-fallback="${escapeAttr(p.fallbackImage&&p.fallbackImage!==p.image?p.fallbackImage:'')}" loading="lazy" decoding="async" fetchpriority="low" onerror="if(!this.dataset.fallbackUsed&amp;&amp;this.dataset.fallback){this.dataset.fallbackUsed='1';this.src=this.dataset.fallback}else{this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'商品画像を取得できません'}))}">`:`<div class="pack-image-placeholder">${cat==='art'?'神アート':p.legacyFallback?'公式商品ページ未確認':'商品画像なし'}</div>`;
   return `<${tag} class="pack-item${match?' pack-item-matched':''}"${attrs}>${match?'<strong class="pack-match-label">このバージョンの収録商品</strong>':''}${picture}<span>${escapeHtml(p.name)}</span></${tag}>`;
  }
  for(const p of data){const cat=productCategory(p);groups[cat].push(tile(p,cat,versionMatchesProduct(collectorNumber,p)));}
