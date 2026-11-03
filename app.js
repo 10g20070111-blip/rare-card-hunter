@@ -111,29 +111,33 @@ function officialProductLinks(raw=''){
  }
  return products.slice(0,60);
 }
-// Resolve a product's main image through the official Worker; keep reader as fallback.
-const productImageCache=new Map();
-async function productImageFromOfficial(product){
- const key=product.url;
- if(!key)return '';
- if(productImageCache.has(key))return productImageCache.get(key);
- const task=(async()=>{
-  try{
-   const endpoint=new URL(getSearchApi());endpoint.searchParams.set('product',product.url);endpoint.searchParams.set('v','23121');
-   const response=await fetch(endpoint.href,{signal:AbortSignal.timeout(12000)});
-   if(response.ok){const data=await response.json();if(data.image&&data.selection!=='metadata'&&data.verifiedPackage)return data.image;}
-  }catch{}
-  return '';
- })();productImageCache.set(key,task);return task;
+// Official product catalogue: resolve a printed set code against an actual official product page.
+const productLookupCache=new Map();
+async function officialProductByCode(code){
+ if(!code)return null;
+ if(productLookupCache.has(code))return productLookupCache.get(code);
+ const task=(async()=>{try{
+  const endpoint=new URL(getSearchApi());endpoint.searchParams.set('catalog',code);
+  const r=await fetch(endpoint.href,{signal:AbortSignal.timeout(14500)});
+  if(r.ok){const d=await r.json();return d.verified?d:null;}
+ }catch{}return null;})();productLookupCache.set(code,task);return task;
 }
 async function enrichProducts(card){
- const products=Array.isArray(card.products)?card.products:[];
- if(!products.length)return card;
- const unique=[...new Map(products.filter(p=>p?.name).map(p=>[(p.url||p.name).split('#')[0],p])).values()].slice(0,30);
- const result={...card,products:unique.map(p=>({...p,image:p.image||''}))};
- const queue=unique.map((p,i)=>({p,i})).filter(({p})=>p.url&&!p.legacyFallback&&!isPromotion(card.number,p)&&!p.image);
- let index=0;async function worker(){while(index<queue.length){const {p,i}=queue[index++];result.products[i].image=await productImageFromOfficial(p);if(typeof result.onProductImage==='function')result.onProductImage(result.products);}}
- await Promise.all(Array.from({length:Math.min(4,queue.length)},worker));return result;
+ const original=Array.isArray(card.products)?card.products:[];
+ const codes=new Set(original.map(p=>codeFromProduct(p)).filter(Boolean));
+ const printed=codeFromCollector(card.number);
+ if(printed)codes.add(printed);
+ const catalog=await Promise.all([...codes].slice(0,24).map(officialProductByCode));
+ const verified=new Map(catalog.filter(Boolean).map(p=>[p.code,p]));
+ const merged=new Map();
+ for(const p of original){
+  if(!p?.name)continue;
+  const code=codeFromProduct(p),entry=verified.get(code);
+  const item=entry?{...p,name:entry.name,url:entry.url,image:entry.image||'',verifiedProduct:true,legacyFallback:false}:{...p,verifiedProduct:false};
+  merged.set(code||p.name,item);
+ }
+ for(const entry of verified.values())if(!merged.has(entry.code))merged.set(entry.code,{name:entry.name,url:entry.url,image:entry.image||'',verifiedProduct:true});
+ return {...card,products:[...merged.values()]};
 }
 function extractFlavor(raw=''){return officialSections(raw).flavor;}
 function splitOfficialSections(raw=''){return officialSections(raw);}
@@ -450,7 +454,7 @@ $('fetchPage').onclick=async()=>{
 
   if(isOfficial){const exactImage=officialCardImage(url.href);if(exactImage)parsed.image=exactImage;}
   if(!parsed.name&&!parsed.text&&!parsed.image&&!parsed.cost&&!parsed.number)throw Error('ページからカード情報を抽出できませんでした');
-  draft={...parsed,text:normalizeRules(parsed.text),flavor:isOfficial?(parsed.flavor||''):(parsed.flavor||extractFlavor(body)),url:url.href};renderPreview();if(isOfficial&&draft.products?.length){enrichProducts(draft).then(updated=>{if(draft?.url===updated.url){draft.products=updated.products;renderProductInfo('previewProducts',draft.products,draft.number,draft.url)}}).catch(()=>{});}requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
+  draft={...parsed,text:normalizeRules(parsed.text),flavor:isOfficial?(parsed.flavor||''):(parsed.flavor||extractFlavor(body)),url:url.href};renderPreview();if(isOfficial){enrichProducts(draft).then(updated=>{if(draft?.url===updated.url){draft.products=updated.products;renderProductInfo('previewProducts',draft.products,draft.number,draft.url)}}).catch(()=>{});}requestAnimationFrame(()=>$('previewPanel').scrollIntoView({behavior:'smooth',block:'start'}));
   const missing=[];if(!draft.name)missing.push('カード名');if(!draft.cost)missing.push('コスト');if(!draft.number)missing.push('コレクター番号');if(!draft.text)missing.push('テキスト');if(!draft.image)missing.push('画像');
   $('fetchStatus').textContent=missing.length?'一部の情報を取得できませんでした（'+missing.join('・')+'）。「編集する」から補完できます。':'カード情報を取得しました。内容を確認してください。';
  }catch(e){$('fetchStatus').textContent='自動取得に失敗しました。通信制限、外部読み取りサービスの応答、またはページ形式が原因の可能性があります。時間をおいて再試行するか、「編集する」から入力してください。';}
@@ -502,7 +506,7 @@ function productCategory(product={}){
 function isPromotion(number='',product={}){return productCategory(product)==='promo';}
 function versionMatchesProduct(number='',product={}){
  const c=codeFromCollector(number),p=codeFromProduct(product);
- return !!(c&&p&&c===p);
+ return !!(c&&p&&c===p&&product.verifiedProduct===true);
 }
 function renderProductInfo(target,products,collectorNumber='',cardUrl=''){
  const el=$(target);if(!el)return;
@@ -514,14 +518,11 @@ function renderProductInfo(target,products,collectorNumber='',cardUrl=''){
  function tile(p,cat,match=false){
   const url=/^https:\/\/dm\.takaratomy\.co\.jp\//.test(p.url||'')?p.url:'';
   const tag=url?'a':'div';const attrs=url?` href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"`:'';
-  const picture=cat==='promo'?'<div class="pack-image-placeholder pack-promo-placeholder">プロモーションカード</div>':p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'商品画像を取得できません'}))">`:`<div class="pack-image-placeholder">${cat==='art'?'神アート':p.legacyFallback?'旧商品・画像未登録':'商品画像なし'}</div>`;
+  const picture=cat==='promo'?'<div class="pack-image-placeholder pack-promo-placeholder">プロモーションカード</div>':p.image?`<img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.name)}" loading="lazy" decoding="async" fetchpriority="low" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'pack-image-placeholder',textContent:'商品画像を取得できません'}))">`:`<div class="pack-image-placeholder">${cat==='art'?'神アート':p.legacyFallback?'公式商品ページ未確認':'商品画像なし'}</div>`;
   return `<${tag} class="pack-item${match?' pack-item-matched':''}"${attrs}>${match?'<strong class="pack-match-label">このバージョンの収録商品</strong>':''}${picture}<span>${escapeHtml(p.name)}</span></${tag}>`;
  }
  for(const p of data){const cat=productCategory(p);groups[cat].push(tile(p,cat,versionMatchesProduct(collectorNumber,p)));}
- if(!hasExact&&code){
-  const cat=/DMART/.test(code)?'art':'pack';
-  groups[cat].unshift(tile({name:`${code}（コレクター番号と一致・商品名未確認）`,url:'',legacyFallback:true},cat,true));
- }
+ // A printed collector number is not proof of a catalogue listing. Never fabricate a matched product.
  if(promo&&!data.some(p=>productCategory(p)==='promo')){
   groups.promo.unshift(tile({name:`プロモーション版（${collectorNumber||'番号不明'}）・配布元未確認`,url:source},'promo',true));
  }
@@ -580,7 +581,7 @@ $('tabRegistered').onclick=()=>{activeCollectionTab='registered';paintCollection
 $('backToCollection').onclick=()=>{selectedCardId=null;paintCollection()};
 function openCardDetail(id){const c=cards.find(x=>x.id===id);if(!c)return;selectedCardId=id;$('collectionItems').hidden=true;$('cardDetail').hidden=false;
  const rows=[['コスト',c.cost],['コレクター番号',c.number],['カードタイプ',c.type],['文明',c.civilization],['レアリティ',c.rarity],['パワー',c.power||'—'],['種族',c.race]];
- $('detailContent').innerHTML=`<h2>${escapeHtml(displayNameWithoutNumber(c.name,c.number))}${c.number?` <small class="name-number">(${escapeHtml(c.number)})</small>`:''}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(decorateAbilitySymbols(c.text)||'—')}</p></section>${c.flavor?`<section class="detail-text"><b>フレーバー</b><p>${escapeHtml(c.flavor)}</p></section>`:''}<section class="detail-text"><b>商品情報</b><div id="detailProducts" class="pack-grid"></div></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;renderProductInfo('detailProducts',c.products,c.number,c.url);
+ $('detailContent').innerHTML=`<h2>${escapeHtml(displayNameWithoutNumber(c.name,c.number))}${c.number?` <small class="name-number">(${escapeHtml(c.number)})</small>`:''}</h2><div class="detail-layout"><div class="detail-image">${c.image?`<img src="${escapeAttr(c.image)}" alt="${escapeAttr(c.name)}">`:'画像なし'}</div><dl class="detail-data">${rows.map(([k,v])=>v?`<div class="${k==='種族'?'race-wide':''}"><dt>${k}</dt><dd>${k==='種族'?raceMarkup(v):escapeHtml(v)}</dd></div>`:'').join('')}</dl></div><section class="detail-text"><b>カードテキスト</b><p>${escapeHtml(decorateAbilitySymbols(c.text)||'—')}</p></section>${c.flavor?`<section class="detail-text"><b>フレーバー</b><p>${escapeHtml(c.flavor)}</p></section>`:''}<section class="detail-text"><b>商品情報</b><div id="detailProducts" class="pack-grid"></div></section><p class="hint">取得元：${escapeHtml(c.url||'')}</p><button id="deleteCard" class="action danger full">このカードを削除</button>`;renderProductInfo('detailProducts',c.products,c.number,c.url);if(c.url?.includes('dm.takaratomy.co.jp/card/detail/'))enrichProducts(c).then(x=>{if($('detailProducts'))renderProductInfo('detailProducts',x.products,c.number,c.url)}).catch(()=>{});
  $('toggleWanted').textContent=c.wanted?'購入予定から外す':'購入予定に追加';$('deleteCard').onclick=async()=>{if(!confirm('このカードを登録一覧から削除しますか？購入予定からも削除されます。'))return;await req(st('cards','readwrite').delete(c.id));selectedCardId=null;await load();paintCollection()};
 }
 $('toggleWanted').onclick=async()=>{const c=cards.find(x=>x.id===selectedCardId);if(!c)return;c.wanted=!c.wanted;await saveCard(c);openCardDetail(c.id);$('registeredCount').textContent=cards.length;$('wishlistCount').textContent=cards.filter(x=>x.wanted).length;};
